@@ -53,3 +53,28 @@ read every document.
   logs.
 - Update architecture or decision documentation when a ticket changes an
   accepted boundary. Do not duplicate the Linear backlog in repository files.
+
+## Linear ticket workflow
+
+When a task names a Letterpress Linear ticket:
+
+1. Read the ticket before making changes and treat its scope, dependencies, and
+   acceptance criteria as the implementation contract.
+2. Move the ticket to `In Progress` when implementation begins.
+3. Do not post routine progress comments or command-by-command narration.
+4. Add a comment during implementation only when:
+   - work is materially blocked and needs a decision or external change;
+   - the approved scope or acceptance criteria must change; or
+   - a material decision affects later tickets.
+5. When implementation and verification are complete, add one concise handoff
+   comment containing:
+   - branch and commit hash;
+   - material behavior and files changed;
+   - exact verification commands and observed results;
+   - skipped checks, limitations, and follow-up work.
+6. Mark the ticket `Done` only after its completed changes are merged into
+   `main`. If implementation is complete but awaiting review or merge, leave it
+   `In Progress` or use `In Review` when that status is available.
+7. Do not update unrelated tickets or begin the next ticket automatically.
+8. If Linear is unavailable, continue repository work when safe and report the
+   missing ticket update in the final handoff.
