@@ -4,7 +4,7 @@ Letterpress is a two-player word game played on a grid of letter tiles. Players
 take turns building words and claiming tiles. The game ends when no neutral
 tiles remain, and the player who owns the most tiles wins.
 
-The game will typically use a 5×5 grid.
+The first implementation uses a 5×5 grid.
 
 ## Game rules
 
@@ -27,11 +27,18 @@ The game will typically use a 5×5 grid.
 
 ## Valid words
 
-- A word must appear in the English dictionary. There is no minimum word
-  length.
+- During the MVP, every non-empty sequence of selected letters is considered a
+  valid word. Dictionary validation will be added later.
 - A word cannot be played more than once.
 - A word cannot be played if it is a prefix of a previously played word. For
   example, after `dogs` has been played, `dog` is not allowed.
+
+Letters behave literally: `Q` represents `Q`, not `Qu`.
+
+## Implementations
+
+Different implementation approaches live in separate directories. The first is
+a web client-server application under [`approaches/web-client-server`](approaches/web-client-server/).
 
 ## Winning
 

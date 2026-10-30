@@ -1,0 +1,49 @@
+# Allow Codex to work anywhere in this repository without approval prompts.
+# This project config is loaded only when the repository is trusted.
+approval_policy = "never"
+default_permissions = "letterpress-local"
+
+[features]
+network_proxy = true
+
+[shell_environment_policy]
+inherit = "all"
+
+[shell_environment_policy.set]
+PATH = "/Users/chirayu/.local/share/go/go1.27.3/bin:/private/tmp/letterpress-go/bin:/Users/chirayu/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:/Users/chirayu/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/fallback:/Users/chirayu/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/override:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/pkg/env/global/bin:/usr/bin:/bin:/usr/sbin:/sbin:/Library/Apple/usr/bin:/Applications/ChatGPT.app/Contents/Resources"
+GOPATH = "/private/tmp/letterpress-go"
+GOMODCACHE = "/private/tmp/letterpress-go/pkg/mod"
+GOCACHE = "/private/tmp/letterpress-go/build-cache"
+GOTOOLCHAIN = "local"
+GOTELEMETRY = "off"
+GOTELEMETRYDIR = "/private/tmp/letterpress-go/telemetry"
+
+[permissions.letterpress-local]
+description = "Unrestricted file operations inside the Letterpress repository."
+
+[permissions.letterpress-local.filesystem]
+":minimal" = "read"
+":tmpdir" = "write"
+":slash_tmp" = "write"
+"/Users/chirayu/code/games/letterpress" = "write"
+"/Users/chirayu/.cache/codex-runtimes/codex-primary-runtime/dependencies" = "read"
+"/Users/chirayu/.local/share/go/go1.27.3" = "read"
+"/Users/chirayu/.gitconfig" = "read"
+"/Users/chirayu/Library/Application Support/go/telemetry" = "read"
+"/System/Library/OpenSSL" = "read"
+
+[permissions.letterpress-local.network]
+enabled = true
+allow_local_binding = true
+
+[permissions.letterpress-local.network.domains]
+"localhost" = "allow"
+"127.0.0.1" = "allow"
+"registry.npmjs.org" = "allow"
+"proxy.golang.org" = "allow"
+"sum.golang.org" = "allow"
+"storage.googleapis.com" = "allow"
+"**.github.com" = "allow"
+"**.githubusercontent.com" = "allow"
+"**.playwright.dev" = "allow"
+"**.microsoft.com" = "allow"
