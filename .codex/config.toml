@@ -1,6 +1,6 @@
 # Allow Codex to work anywhere in this repository without approval prompts.
 # This project config is loaded only when the repository is trusted.
-approval_policy = "never"
+approval_policy = "on-request"
 default_permissions = "letterpress-local"
 
 [features]
