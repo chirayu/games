@@ -12,8 +12,9 @@ Development is tracked in the [Letterpress Linear project](https://linear.app/ch
 - Node.js 24 or newer
 - pnpm 11
 
-No database tools are required for this foundation ticket. SQLite, Goose, and
-sqlc setup will be added with the persistence work.
+No standalone SQLite installation is required. The backend uses the pure-Go
+SQLite driver, applies embedded Goose migrations, and keeps sqlc output in the
+repository.
 
 ## Layout
 
@@ -22,6 +23,7 @@ backend/
   cmd/server/
   internal/game/
   internal/httpapi/
+  internal/store/sqlite/
 frontend/
   src/api/
   src/components/
@@ -64,6 +66,7 @@ Format and test the backend:
 
 ```sh
 cd approaches/web-client-server/backend
+go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.30.0 generate
 gofmt -w .
 go test ./...
 go build ./...
@@ -82,9 +85,10 @@ Use `pnpm format:check` when checking formatting without changing files.
 
 ## Development status
 
-The pure Go game engine, HTTP service health endpoint, Vue application, router,
-Vite development proxy, and focused backend and frontend tests are in place.
-Persistence and gameplay flows are intentionally reserved for later tickets.
+The pure Go game engine, SQLite persistence layer, HTTP service health endpoint,
+Vue application, router, Vite development proxy, and focused backend and
+frontend tests are in place. HTTP gameplay flows are intentionally reserved for
+later tickets.
 
 ## Documentation
 
