@@ -60,6 +60,15 @@ days and may be re-established by reopening the private invitation link.
 For the MVP, games do not expire automatically. Retention and deletion controls
 can be added when operating requirements are known.
 
+`POST /api/v1/games` creates the authoritative 5×5 game and returns the two raw
+capabilities once; the client immediately exchanges Player 1's capability and
+places Player 2's capability only in the invitation URL fragment. Session
+exchange returns the authenticated seat, never the capability. API successes
+use a `data` envelope and failures use an `error` envelope with stable `code`
+and `message` fields. All state-changing endpoints require a matching browser
+origin. Secure cookies are the default, with an explicit insecure override for
+local HTTP development.
+
 ## Client recovery
 
 The client treats server state as authoritative. A selected, unsubmitted move

@@ -11,5 +11,6 @@ export async function getHealth(): Promise<HealthResponse> {
     throw new Error(`health check failed with status ${response.status}`);
   }
 
-  return response.json() as Promise<HealthResponse>;
+  const body = (await response.json()) as { data: HealthResponse };
+  return body.data;
 }

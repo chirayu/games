@@ -11,11 +11,13 @@ describe("HomeView", () => {
   it("renders the Letterpress landing page and reports a healthy server", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({ status: "ok" }),
+      json: async () => ({ data: { status: "ok" } }),
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    const wrapper = mount(HomeView);
+    const wrapper = mount(HomeView, {
+      global: { stubs: { RouterLink: { template: "<a><slot /></a>" } } },
+    });
     await flushPromises();
 
     expect(wrapper.get("h1").text()).toBe(
@@ -30,7 +32,9 @@ describe("HomeView", () => {
   it("reports when the server cannot be reached", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")));
 
-    const wrapper = mount(HomeView);
+    const wrapper = mount(HomeView, {
+      global: { stubs: { RouterLink: { template: "<a><slot /></a>" } } },
+    });
     await flushPromises();
 
     expect(wrapper.get('[role="status"]').text()).toBe(

@@ -103,3 +103,144 @@ h1 {
   margin: 1.75rem auto 2rem;
   max-width: 38rem;
 }
+
+.primary-action,
+.secondary-action {
+  border: 0;
+  border-radius: 999px;
+  cursor: pointer;
+  display: inline-flex;
+  font-weight: 700;
+  justify-content: center;
+  text-decoration: none;
+}
+
+.primary-action {
+  background: #2f6f5a;
+  box-shadow: 0 0.24rem 0 #1f4e3e;
+  color: #fffdf7;
+  padding: 0.85rem 1.4rem;
+}
+
+.primary-action:hover {
+  background: #285f4d;
+}
+
+.primary-action:disabled {
+  cursor: wait;
+  opacity: 0.62;
+}
+
+.secondary-action {
+  background: #e7dcc8;
+  color: #40372a;
+  padding: 0.78rem 1rem;
+}
+
+.hero > .primary-action {
+  margin-bottom: 2rem;
+}
+
+.hero > .server-status {
+  display: flex;
+  margin: 0 auto;
+  width: fit-content;
+}
+
+.page-shell {
+  align-items: center;
+  background:
+    radial-gradient(
+      circle at 18% 15%,
+      rgb(222 174 102 / 20%),
+      transparent 28rem
+    ),
+    radial-gradient(
+      circle at 84% 78%,
+      rgb(77 141 119 / 13%),
+      transparent 30rem
+    ),
+    #f6f0e4;
+  display: flex;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 2rem 1rem;
+}
+
+.flow-card {
+  background: rgb(255 253 247 / 88%);
+  border: 1px solid rgb(82 66 43 / 16%);
+  border-radius: 1.25rem;
+  box-shadow: 0 1.2rem 3.5rem rgb(73 58 37 / 12%);
+  max-width: 46rem;
+  padding: clamp(1.5rem, 6vw, 3.5rem);
+  width: 100%;
+}
+
+.flow-card--compact {
+  max-width: 38rem;
+  text-align: center;
+}
+
+.flow-card h1 {
+  font-size: clamp(2.4rem, 8vw, 4.5rem);
+}
+
+.flow-card h2 {
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 1.65rem;
+  font-weight: 500;
+  margin: 0 0 0.5rem;
+}
+
+.invitation {
+  border-top: 1px solid rgb(82 66 43 / 14%);
+  margin-top: 2rem;
+  padding-top: 2rem;
+}
+
+.invitation label {
+  display: block;
+  font-size: 0.8rem;
+  font-weight: 700;
+  margin: 1.5rem 0 0.5rem;
+}
+
+.copy-row {
+  display: flex;
+  gap: 0.65rem;
+}
+
+.copy-row input {
+  background: #fff;
+  border: 1px solid #cbbda6;
+  border-radius: 0.65rem;
+  color: #40372a;
+  min-width: 0;
+  padding: 0.75rem;
+  width: 100%;
+}
+
+.notice {
+  color: var(--ink-muted);
+  line-height: 1.5;
+  margin: 1.25rem 0 0;
+}
+
+.notice--error {
+  color: #933f3a;
+}
+
+.text-link {
+  color: #2f6f5a;
+  display: inline-block;
+  font-weight: 700;
+  margin-top: 1.5rem;
+}
+
+@media (max-width: 36rem) {
+  .copy-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}

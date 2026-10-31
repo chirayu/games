@@ -24,6 +24,10 @@ const tiles = ["L", "E", "T", "T", "E", "R", "P", "R", "E", "S", "S"];
         can unfold across an afternoon—or across a week.
       </p>
 
+      <RouterLink class="primary-action" to="/games/new"
+        >Start a game</RouterLink
+      >
+
       <ServerStatus />
     </section>
   </main>
