@@ -37,6 +37,13 @@ server authenticates the player, checks turn and version, validates and applies
 the move, records it, and updates game state. A stale version returns a conflict
 without changing state.
 
+SQLite schema changes are ordered Goose migrations embedded in the service.
+sqlc generates the typed query layer from those migrations and hand-written
+queries. Connections enable foreign keys, use a five-second busy timeout, and
+put file databases in WAL mode. Games contain the current board state while
+moves form the immutable turn history; inserting a move and advancing the
+versioned state share one transaction.
+
 ## Invitations and sessions
 
 Game creation generates separate 32-byte random secrets for the two player
