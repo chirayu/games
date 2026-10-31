@@ -22,6 +22,30 @@ export interface PlayerSession {
   seat: number;
 }
 
+export type TileOwner = 0 | 1 | 2;
+
+export interface GameTile {
+  index: number;
+  letter: string;
+  owner: TileOwner;
+  protected: boolean;
+}
+
+export interface GameState {
+  id: string;
+  width: number;
+  height: number;
+  tiles: GameTile[];
+  scores: {
+    playerOne: number;
+    playerTwo: number;
+  };
+  activePlayer: 1 | 2;
+  playerSeat: 1 | 2;
+  version: number;
+  status: "active" | "completed";
+}
+
 export class APIError extends Error {
   readonly code: string;
   readonly status: number;
@@ -52,6 +76,12 @@ export async function exchangeSession(
       body: JSON.stringify({ token }),
     },
   );
+}
+
+export async function getGame(gameId: string): Promise<GameState> {
+  return request<GameState>(`/api/v1/games/${encodeURIComponent(gameId)}`, {
+    method: "GET",
+  });
 }
 
 async function request<T>(path: string, init: RequestInit): Promise<T> {

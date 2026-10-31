@@ -41,13 +41,14 @@ Start the backend in one terminal:
 
 ```sh
 cd approaches/web-client-server/backend
-go run ./cmd/server -insecure-cookies
+go run ./cmd/server -insecure-cookies -allowed-origin http://localhost:5173
 ```
 
 The server stores local game data in `letterpress.db`. Secure cookies are the
 default; `-insecure-cookies` is the explicit override for local HTTP
-development. Use `-db` to select a different SQLite path and `-allowed-origin`
-when the browser origin intentionally differs from the request host.
+development. The Vite origin is allowed explicitly because its development
+proxy forwards API requests to a different host. Use `-db` to select a
+different SQLite path.
 
 The service listens on `http://localhost:8080` by default. Confirm it is ready:
 
@@ -92,9 +93,10 @@ Use `pnpm format:check` when checking formatting without changing files.
 ## Development status
 
 The pure Go game engine, SQLite persistence layer, secure game creation and
-invitation flow, HTTP service, Vue application, router, Vite development proxy,
-and focused backend and frontend tests are in place. Board display and move
-submission are intentionally reserved for later tickets.
+invitation flow, authenticated responsive board view, HTTP service, Vue
+application, router, Vite development proxy, and focused backend and frontend
+tests are in place. Move submission is intentionally reserved for a later
+ticket.
 
 ## Documentation
 

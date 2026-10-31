@@ -2,7 +2,7 @@ import { createRouter, createWebHistory } from "vue-router";
 
 import HomeView from "../views/HomeView.vue";
 import CreateGameView from "../views/CreateGameView.vue";
-import GameReadyView from "../views/GameReadyView.vue";
+import GameView from "../views/GameView.vue";
 import JoinGameView from "../views/JoinGameView.vue";
 
 export default createRouter({
@@ -26,7 +26,7 @@ export default createRouter({
     {
       path: "/games/:gameId",
       name: "game",
-      component: GameReadyView,
+      component: GameView,
     },
   ],
 });

@@ -31,6 +31,7 @@ func NewHandler(service *app.Service, config Config) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", health)
 	mux.HandleFunc("POST /api/v1/games", handler.createGame)
+	mux.HandleFunc("GET /api/v1/games/{gameID}", handler.getGame)
 	mux.HandleFunc("POST /api/v1/games/{gameID}/sessions", handler.exchangeSession)
 	return mux
 }
@@ -112,6 +113,28 @@ func (handler *handler) exchangeSession(response http.ResponseWriter, request *h
 		"gameId": session.GameID,
 		"seat":   session.Seat,
 	}})
+}
+
+func (handler *handler) getGame(response http.ResponseWriter, request *http.Request) {
+	response.Header().Set("Cache-Control", "no-store")
+	gameID := request.PathValue("gameID")
+	token := ""
+	if cookie, err := request.Cookie(sessionCookieName(gameID)); err == nil {
+		token = cookie.Value
+	}
+	view, err := handler.service.GetGame(request.Context(), gameID, token)
+	switch {
+	case errors.Is(err, app.ErrGameNotFound):
+		writeError(response, http.StatusNotFound, "game_not_found", "game was not found")
+		return
+	case errors.Is(err, app.ErrUnauthorized):
+		writeError(response, http.StatusUnauthorized, "unauthorized", "a valid player session is required")
+		return
+	case err != nil:
+		writeError(response, http.StatusInternalServerError, "internal_error", "could not load game")
+		return
+	}
+	writeJSON(response, http.StatusOK, map[string]any{"data": view})
 }
 
 func (handler *handler) validOrigin(request *http.Request) bool {

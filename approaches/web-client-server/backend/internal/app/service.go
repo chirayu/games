@@ -25,9 +25,17 @@ const (
 // to a player in the requested game.
 var ErrInvalidSecret = errors.New("invalid invitation secret")
 
+var (
+	// ErrGameNotFound means the requested game does not exist.
+	ErrGameNotFound = errors.New("game not found")
+	// ErrUnauthorized means the game-scoped player session is absent or invalid.
+	ErrUnauthorized = errors.New("unauthorized game session")
+)
+
 // Store is the persistence needed by the game creation and session flows.
 type Store interface {
 	CreateGame(context.Context, sqlite.Game, [2]sqlite.Player) error
+	GetGame(context.Context, string) (sqlite.Game, error)
 	GetPlayerByTokenHash(context.Context, string, [32]byte) (sqlite.Player, error)
 }
 
@@ -44,6 +52,33 @@ type Session struct {
 	GameID string
 	Seat   int64
 	Token  string
+}
+
+// GameView is the authenticated, derived state returned to a player.
+type GameView struct {
+	ID           string     `json:"id"`
+	Width        int        `json:"width"`
+	Height       int        `json:"height"`
+	Tiles        []GameTile `json:"tiles"`
+	Scores       Scores     `json:"scores"`
+	ActivePlayer int64      `json:"activePlayer"`
+	PlayerSeat   int64      `json:"playerSeat"`
+	Version      int64      `json:"version"`
+	Status       string     `json:"status"`
+}
+
+// GameTile is one row-major tile in an authenticated game response.
+type GameTile struct {
+	Index     int    `json:"index"`
+	Letter    string `json:"letter"`
+	Owner     int64  `json:"owner"`
+	Protected bool   `json:"protected"`
+}
+
+// Scores contains the current number of tiles owned by each player.
+type Scores struct {
+	PlayerOne int `json:"playerOne"`
+	PlayerTwo int `json:"playerTwo"`
 }
 
 // Service coordinates game creation and player authentication.
@@ -109,11 +144,10 @@ func (service *Service) CreateGame(ctx context.Context) (CreatedGame, error) {
 
 // ExchangeSession authenticates one invitation capability for a game.
 func (service *Service) ExchangeSession(ctx context.Context, gameID, token string) (Session, error) {
-	secret, err := base64.RawURLEncoding.DecodeString(token)
-	if err != nil || len(secret) != secretBytes {
+	tokenHash, ok := invitationHash(token)
+	if !ok {
 		return Session{}, ErrInvalidSecret
 	}
-	tokenHash := sha256.Sum256(secret)
 	player, err := service.store.GetPlayerByTokenHash(ctx, gameID, tokenHash)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Session{}, ErrInvalidSecret
@@ -122,6 +156,62 @@ func (service *Service) ExchangeSession(ctx context.Context, gameID, token strin
 		return Session{}, fmt.Errorf("look up player: %w", err)
 	}
 	return Session{GameID: gameID, Seat: player.Seat, Token: token}, nil
+}
+
+// GetGame returns the current authoritative state for an authenticated player.
+func (service *Service) GetGame(ctx context.Context, gameID, token string) (GameView, error) {
+	stored, err := service.store.GetGame(ctx, gameID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return GameView{}, ErrGameNotFound
+	}
+	if err != nil {
+		return GameView{}, fmt.Errorf("get game: %w", err)
+	}
+
+	tokenHash, ok := invitationHash(token)
+	if !ok {
+		return GameView{}, ErrUnauthorized
+	}
+	player, err := service.store.GetPlayerByTokenHash(ctx, gameID, tokenHash)
+	if errors.Is(err, sql.ErrNoRows) {
+		return GameView{}, ErrUnauthorized
+	}
+	if err != nil {
+		return GameView{}, fmt.Errorf("authenticate player: %w", err)
+	}
+
+	if len(stored.BoardLetters) != game.DefaultWidth*game.DefaultHeight || len(stored.TileOwners) != len(stored.BoardLetters) {
+		return GameView{}, fmt.Errorf("stored game %q has invalid board dimensions", gameID)
+	}
+	if stored.CurrentPlayer != int64(game.PlayerOne) && stored.CurrentPlayer != int64(game.PlayerTwo) {
+		return GameView{}, fmt.Errorf("stored game %q has invalid active player", gameID)
+	}
+	if stored.Status != string(game.StatusActive) && stored.Status != string(game.StatusCompleted) {
+		return GameView{}, fmt.Errorf("stored game %q has invalid status", gameID)
+	}
+	owners := make([]game.Player, len(stored.TileOwners))
+	for index, owner := range stored.TileOwners {
+		owners[index] = game.Player(owner)
+	}
+	analysis, err := game.AnalyzeOwnership(game.DefaultWidth, game.DefaultHeight, owners)
+	if err != nil {
+		return GameView{}, fmt.Errorf("analyze stored game: %w", err)
+	}
+
+	tiles := make([]GameTile, len(stored.BoardLetters))
+	for index, letter := range stored.BoardLetters {
+		if letter < 'A' || letter > 'Z' {
+			return GameView{}, fmt.Errorf("stored game %q has invalid letter at tile %d", gameID, index)
+		}
+		tiles[index] = GameTile{
+			Index: index, Letter: string([]byte{letter}), Owner: int64(owners[index]), Protected: analysis.Protected[index],
+		}
+	}
+	return GameView{
+		ID: gameID, Width: game.DefaultWidth, Height: game.DefaultHeight, Tiles: tiles,
+		Scores:       Scores{PlayerOne: analysis.PlayerOneScore, PlayerTwo: analysis.PlayerTwoScore},
+		ActivePlayer: stored.CurrentPlayer, PlayerSeat: player.Seat, Version: stored.Version, Status: stored.Status,
+	}, nil
 }
 
 func (service *Service) playerToken() (string, [32]byte, error) {
@@ -143,4 +233,12 @@ func (service *Service) randomTokenBytes(size int) (string, []byte, error) {
 		return "", nil, err
 	}
 	return base64.RawURLEncoding.EncodeToString(randomBytes), randomBytes, nil
+}
+
+func invitationHash(token string) ([32]byte, bool) {
+	secret, err := base64.RawURLEncoding.DecodeString(token)
+	if err != nil || len(secret) != secretBytes {
+		return [32]byte{}, false
+	}
+	return sha256.Sum256(secret), true
 }

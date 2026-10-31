@@ -69,6 +69,13 @@ and `message` fields. All state-changing endpoints require a matching browser
 origin. Secure cookies are the default, with an explicit insecure override for
 local HTTP development.
 
+`GET /api/v1/games/{gameID}` authenticates the game-scoped cookie and returns
+the current persisted board plus the requesting player's seat. Scores and
+protection are derived by the domain package from tile ownership on every read,
+so clients receive a deterministic view without duplicating game rules. Game
+responses are marked `no-store`; a missing or invalid session is unauthorized,
+while an unknown game has a distinct not-found response.
+
 ## Client recovery
 
 The client treats server state as authoritative. A selected, unsubmitted move
