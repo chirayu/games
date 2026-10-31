@@ -5,10 +5,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GameState } from "../api/games";
 import GameView from "./GameView.vue";
 
-const api = vi.hoisted(() => ({ getGame: vi.fn() }));
+const api = vi.hoisted(() => ({ getGame: vi.fn(), submitMove: vi.fn() }));
 vi.mock("../api/games", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../api/games")>()),
   getGame: api.getGame,
+  submitMove: api.submitMove,
 }));
 
 function testRouter() {
@@ -64,7 +65,7 @@ describe("GameView", () => {
     expect(wrapper.get(".turn-banner").text()).toBe("Your turn");
     expect(wrapper.findAll('[role="gridcell"]')).toHaveLength(25);
     const firstTile = wrapper.get('[role="gridcell"]');
-    expect(firstTile.attributes("tabindex")).toBe("0");
+    expect(firstTile.element.tagName).toBe("BUTTON");
     expect(firstTile.attributes("aria-label")).toContain(
       "A, owned by Player 1, protected, row 1, column 1",
     );
@@ -91,6 +92,119 @@ describe("GameView", () => {
     expect(wrapper.get(".turn-banner").text()).toBe("Player 1’s turn");
     expect(wrapper.get(".score-card--two").text()).toContain("You");
     expect(wrapper.get(".score-card--one").text()).not.toContain("You");
+    expect(
+      wrapper.get<HTMLButtonElement>(".move-submit").element.disabled,
+    ).toBe(true);
+    expect(wrapper.get('[role="gridcell"]').attributes("aria-disabled")).toBe(
+      "true",
+    );
+  });
+
+  it("forms a word in selection order, deselects, and clears", async () => {
+    api.getGame.mockResolvedValue(gameState());
+    const { wrapper } = await mountGame();
+    await flushPromises();
+    const tiles = wrapper.findAll('[role="gridcell"]');
+
+    await tiles[2].trigger("click");
+    await tiles[0].trigger("click");
+    expect(wrapper.get(".move-composer__word strong").text()).toBe("CA");
+    expect(tiles[2].get(".selection-order").text()).toBe("1");
+    expect(tiles[0].get(".selection-order").text()).toBe("2");
+
+    await tiles[2].trigger("click");
+    expect(wrapper.get(".move-composer__word strong").text()).toBe("A");
+    await wrapper.get(".move-clear").trigger("click");
+    expect(wrapper.get(".move-composer__word strong").text()).toBe(
+      "Select tiles",
+    );
+  });
+
+  it("submits selected indexes once and replaces the board state", async () => {
+    const updated = gameState();
+    updated.activePlayer = 2;
+    updated.version = 4;
+    updated.tiles[2].owner = 1;
+    api.getGame.mockResolvedValue(gameState());
+    api.submitMove.mockResolvedValue(updated);
+    const { wrapper } = await mountGame();
+    await flushPromises();
+    const tiles = wrapper.findAll('[role="gridcell"]');
+
+    await tiles[2].trigger("click");
+    await tiles[0].trigger("click");
+    await wrapper.get(".move-submit").trigger("click");
+    await flushPromises();
+
+    expect(api.submitMove).toHaveBeenCalledWith("game-123", [2, 0], 3);
+    expect(wrapper.get(".turn-banner").text()).toBe("Player 2’s turn");
+    expect(wrapper.get(".move-composer__word strong").text()).toBe(
+      "Select tiles",
+    );
+    expect(
+      wrapper
+        .get('[role="gridcell"][aria-colindex="3"]')
+        .attributes("data-owner"),
+    ).toBe("1");
+  });
+
+  it.each([
+    { code: "repeated_word", message: "already been played" },
+    { code: "prefix_word", message: "prefix of a word" },
+    { code: "out_of_turn", message: "no longer your turn" },
+  ])("shows an understandable $code error", async ({ code, message }) => {
+    api.getGame.mockResolvedValue(gameState());
+    api.submitMove.mockRejectedValue({ code, status: 422 });
+    const { wrapper } = await mountGame();
+    await flushPromises();
+
+    await wrapper.get('[role="gridcell"]').trigger("click");
+    await wrapper.get(".move-submit").trigger("click");
+    await flushPromises();
+    expect(wrapper.get('[role="alert"]').text()).toContain(message);
+  });
+
+  it("refreshes authoritative state after a version conflict", async () => {
+    const refreshed = gameState();
+    refreshed.activePlayer = 2;
+    refreshed.version = 4;
+    api.getGame
+      .mockResolvedValueOnce(gameState())
+      .mockResolvedValueOnce(refreshed);
+    api.submitMove.mockRejectedValue({ code: "version_conflict", status: 409 });
+    const { wrapper } = await mountGame();
+    await flushPromises();
+
+    await wrapper.get('[role="gridcell"]').trigger("click");
+    await wrapper.get(".move-submit").trigger("click");
+    await flushPromises();
+    expect(api.getGame).toHaveBeenCalledTimes(2);
+    expect(wrapper.get('[role="alert"]').text()).toContain(
+      "has been refreshed",
+    );
+    expect(wrapper.get(".turn-banner").text()).toBe("Player 2’s turn");
+  });
+
+  it("locks submission while a move is in flight", async () => {
+    let resolveMove: (value: GameState) => void = () => undefined;
+    api.getGame.mockResolvedValue(gameState());
+    api.submitMove.mockReturnValue(
+      new Promise<GameState>((resolve) => {
+        resolveMove = resolve;
+      }),
+    );
+    const { wrapper } = await mountGame();
+    await flushPromises();
+    await wrapper.get('[role="gridcell"]').trigger("click");
+
+    await wrapper.get(".move-submit").trigger("click");
+    expect(
+      wrapper.get<HTMLButtonElement>(".move-submit").element.disabled,
+    ).toBe(true);
+    await wrapper.get(".move-submit").trigger("click");
+    expect(api.submitMove).toHaveBeenCalledTimes(1);
+    resolveMove(gameState());
+    await flushPromises();
   });
 
   it.each([

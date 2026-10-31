@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"letterpress/backend/internal/app"
+	"letterpress/backend/internal/game"
 )
 
 const sessionLifetime = 180 * 24 * time.Hour
@@ -33,6 +34,7 @@ func NewHandler(service *app.Service, config Config) http.Handler {
 	mux.HandleFunc("POST /api/v1/games", handler.createGame)
 	mux.HandleFunc("GET /api/v1/games/{gameID}", handler.getGame)
 	mux.HandleFunc("POST /api/v1/games/{gameID}/sessions", handler.exchangeSession)
+	mux.HandleFunc("POST /api/v1/games/{gameID}/moves", handler.submitMove)
 	return mux
 }
 
@@ -135,6 +137,60 @@ func (handler *handler) getGame(response http.ResponseWriter, request *http.Requ
 		return
 	}
 	writeJSON(response, http.StatusOK, map[string]any{"data": view})
+}
+
+func (handler *handler) submitMove(response http.ResponseWriter, request *http.Request) {
+	response.Header().Set("Cache-Control", "no-store")
+	if !handler.validOrigin(request) {
+		writeError(response, http.StatusForbidden, "invalid_origin", "request origin is not allowed")
+		return
+	}
+	var input struct {
+		TileIndexes     []int  `json:"tileIndexes"`
+		ExpectedVersion *int64 `json:"expectedVersion"`
+	}
+	decoder := json.NewDecoder(http.MaxBytesReader(response, request.Body, 8192))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil || input.ExpectedVersion == nil || *input.ExpectedVersion < 0 {
+		writeError(response, http.StatusBadRequest, "invalid_request", "tileIndexes and a non-negative expectedVersion are required")
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		writeError(response, http.StatusBadRequest, "invalid_request", "request body must contain one JSON object")
+		return
+	}
+	gameID := request.PathValue("gameID")
+	token := ""
+	if cookie, err := request.Cookie(sessionCookieName(gameID)); err == nil {
+		token = cookie.Value
+	}
+	view, err := handler.service.SubmitMove(request.Context(), gameID, token, input.TileIndexes, *input.ExpectedVersion)
+	switch {
+	case errors.Is(err, app.ErrGameNotFound):
+		writeError(response, http.StatusNotFound, "game_not_found", "game was not found")
+	case errors.Is(err, app.ErrUnauthorized):
+		writeError(response, http.StatusUnauthorized, "unauthorized", "a valid player session is required")
+	case errors.Is(err, app.ErrVersionConflict):
+		writeError(response, http.StatusConflict, "version_conflict", "the board changed; refresh and try again")
+	case errors.Is(err, game.ErrOutOfTurn):
+		writeError(response, http.StatusConflict, "out_of_turn", "it is not your turn")
+	case errors.Is(err, game.ErrGameCompleted):
+		writeError(response, http.StatusConflict, "game_completed", "the game is already complete")
+	case errors.Is(err, game.ErrDuplicateTile):
+		writeError(response, http.StatusUnprocessableEntity, "duplicate_tile", "a tile can be selected only once")
+	case errors.Is(err, game.ErrInvalidTile):
+		writeError(response, http.StatusUnprocessableEntity, "invalid_tile", "a selected tile does not exist")
+	case errors.Is(err, game.ErrInvalidWord):
+		writeError(response, http.StatusUnprocessableEntity, "invalid_word", "select at least one tile")
+	case errors.Is(err, game.ErrRepeatedWord):
+		writeError(response, http.StatusUnprocessableEntity, "repeated_word", "that word has already been played")
+	case errors.Is(err, game.ErrPrefixWord):
+		writeError(response, http.StatusUnprocessableEntity, "prefix_word", "that word is a prefix of a previous word")
+	case err != nil:
+		writeError(response, http.StatusInternalServerError, "internal_error", "could not submit move")
+	default:
+		writeJSON(response, http.StatusOK, map[string]any{"data": view})
+	}
 }
 
 func (handler *handler) validOrigin(request *http.Request) bool {

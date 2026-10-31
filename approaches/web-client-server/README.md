@@ -93,10 +93,10 @@ Use `pnpm format:check` when checking formatting without changing files.
 ## Development status
 
 The pure Go game engine, SQLite persistence layer, secure game creation and
-invitation flow, authenticated responsive board view, HTTP service, Vue
-application, router, Vite development proxy, and focused backend and frontend
-tests are in place. Move submission is intentionally reserved for a later
-ticket.
+invitation flow, authenticated responsive board, transactional move submission,
+HTTP service, Vue application, router, Vite development proxy, and focused
+backend and frontend tests are in place. Multi-day refresh behavior and final
+results are intentionally reserved for later tickets.
 
 ## Documentation
 

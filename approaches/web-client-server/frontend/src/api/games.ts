@@ -84,6 +84,21 @@ export async function getGame(gameId: string): Promise<GameState> {
   });
 }
 
+export async function submitMove(
+  gameId: string,
+  tileIndexes: number[],
+  expectedVersion: number,
+): Promise<GameState> {
+  return request<GameState>(
+    `/api/v1/games/${encodeURIComponent(gameId)}/moves`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tileIndexes, expectedVersion }),
+    },
+  );
+}
+
 async function request<T>(path: string, init: RequestInit): Promise<T> {
   const response = await fetch(path, {
     ...init,

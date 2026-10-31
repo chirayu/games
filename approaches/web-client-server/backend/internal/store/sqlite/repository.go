@@ -20,8 +20,14 @@ import (
 
 const busyTimeout = 5 * time.Second
 
-// ErrVersionConflict indicates that a game changed after the caller read it.
-var ErrVersionConflict = errors.New("game version conflict")
+var (
+	// ErrVersionConflict indicates that a game changed after the caller read it.
+	ErrVersionConflict = errors.New("game version conflict")
+	// ErrGameNotFound indicates that a transactional operation has no game row.
+	ErrGameNotFound = errors.New("game not found")
+	// ErrPlayerNotFound indicates that a capability does not match a player seat.
+	ErrPlayerNotFound = errors.New("player not found")
+)
 
 // Game is the current persisted state of a game.
 type Game struct {
@@ -61,6 +67,10 @@ type GameState struct {
 	Status        string
 	UpdatedAt     time.Time
 }
+
+// MoveOperation validates a move from the state read inside its write
+// transaction and returns the accepted move and resulting state.
+type MoveOperation func(Game, Player, []Move) (Move, GameState, error)
 
 // Repository owns a SQLite connection pool and generated queries.
 type Repository struct {
@@ -264,6 +274,102 @@ func (repository *Repository) ApplyMove(
 	}
 
 	if err := transaction.Commit(); err != nil {
+		return fmt.Errorf("commit move transaction: %w", err)
+	}
+	return nil
+}
+
+// TransactMove authenticates, reads, validates, and persists one move while an
+// immediate SQLite write transaction prevents another writer from interleaving.
+func (repository *Repository) TransactMove(
+	ctx context.Context,
+	gameID string,
+	tokenHash [32]byte,
+	expectedVersion int64,
+	operation MoveOperation,
+) error {
+	connection, err := repository.database.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("acquire move connection: %w", err)
+	}
+	defer connection.Close()
+	if _, err := connection.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+		return fmt.Errorf("begin immediate move transaction: %w", err)
+	}
+	defer func() { _, _ = connection.ExecContext(context.Background(), "ROLLBACK") }()
+	queries := generated.New(connection)
+
+	gameRow, err := queries.GetGame(ctx, gameID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrGameNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("get game for move: %w", err)
+	}
+	if gameRow.Version != expectedVersion {
+		return ErrVersionConflict
+	}
+	playerRow, err := queries.GetPlayerByTokenHash(ctx, generated.GetPlayerByTokenHashParams{
+		GameID: gameID, TokenHash: tokenHash[:],
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrPlayerNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("authenticate move player: %w", err)
+	}
+	moveRows, err := queries.ListMoves(ctx, gameID)
+	if err != nil {
+		return fmt.Errorf("list moves for update: %w", err)
+	}
+	moves := make([]Move, 0, len(moveRows))
+	for _, row := range moveRows {
+		var tileIndexes []int64
+		if err := json.Unmarshal([]byte(row.TileIndexes), &tileIndexes); err != nil {
+			return fmt.Errorf("decode tile indexes for move %d: %w", row.ID, err)
+		}
+		moves = append(moves, Move{
+			ID: row.ID, GameID: row.GameID, Player: row.Player, TurnNumber: row.TurnNumber,
+			TileIndexes: tileIndexes, Word: row.Word, CreatedAt: row.CreatedAt,
+		})
+	}
+
+	storedGame := Game{
+		ID: gameRow.ID, BoardLetters: cloneBytes(gameRow.BoardLetters), TileOwners: cloneBytes(gameRow.TileOwners),
+		CurrentPlayer: gameRow.CurrentPlayer, Status: gameRow.Status, Version: gameRow.Version,
+		CreatedAt: gameRow.CreatedAt, UpdatedAt: gameRow.UpdatedAt,
+	}
+	var token [32]byte
+	copy(token[:], playerRow.TokenHash)
+	player := Player{GameID: playerRow.GameID, Seat: playerRow.Seat, TokenHash: token, CreatedAt: playerRow.CreatedAt}
+	move, state, err := operation(storedGame, player, moves)
+	if err != nil {
+		return err
+	}
+	if move.GameID != gameID || move.Player != player.Seat || move.TurnNumber != int64(len(moves)+1) {
+		return errors.New("move operation returned inconsistent identity or turn")
+	}
+	tileIndexes, err := json.Marshal(move.TileIndexes)
+	if err != nil {
+		return fmt.Errorf("encode tile indexes: %w", err)
+	}
+	rows, err := queries.UpdateGameState(ctx, generated.UpdateGameStateParams{
+		TileOwners: cloneBytes(state.TileOwners), CurrentPlayer: state.CurrentPlayer,
+		Status: state.Status, UpdatedAt: state.UpdatedAt, ID: gameID, Version: expectedVersion,
+	})
+	if err != nil {
+		return fmt.Errorf("update game state: %w", err)
+	}
+	if rows != 1 {
+		return ErrVersionConflict
+	}
+	if err := queries.CreateMove(ctx, generated.CreateMoveParams{
+		GameID: move.GameID, Player: move.Player, TurnNumber: move.TurnNumber,
+		TileIndexes: string(tileIndexes), Word: move.Word, CreatedAt: move.CreatedAt,
+	}); err != nil {
+		return fmt.Errorf("create move: %w", err)
+	}
+	if _, err := connection.ExecContext(ctx, "COMMIT"); err != nil {
 		return fmt.Errorf("commit move transaction: %w", err)
 	}
 	return nil

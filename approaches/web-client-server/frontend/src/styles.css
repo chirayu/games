@@ -368,7 +368,16 @@ h1 {
   display: flex;
   justify-content: center;
   min-width: 0;
+  padding: 0;
   position: relative;
+}
+
+.game-tile[aria-disabled="false"] {
+  cursor: pointer;
+}
+
+.game-tile[aria-disabled="true"] {
+  cursor: default;
 }
 
 .game-tile[data-owner="1"] {
@@ -386,6 +395,13 @@ h1 {
 .game-tile[data-protected="true"] {
   outline: 3px double #282218;
   outline-offset: -0.42rem;
+}
+
+.game-tile--selected {
+  box-shadow:
+    0 0 0 4px #315d9e,
+    0 0.22rem 0 #233f6c;
+  transform: translateY(-0.12rem);
 }
 
 .game-tile:focus-visible {
@@ -411,6 +427,85 @@ h1 {
   padding: 0.2rem;
   position: absolute;
   right: 0.28rem;
+}
+
+.selection-order {
+  align-items: center;
+  background: #315d9e;
+  border-radius: 999px;
+  color: white;
+  display: inline-flex;
+  font-size: clamp(0.62rem, 2vw, 0.78rem);
+  font-weight: 800;
+  height: 1.35rem;
+  justify-content: center;
+  left: 0.28rem;
+  line-height: 1;
+  position: absolute;
+  top: 0.28rem;
+  width: 1.35rem;
+}
+
+.move-composer {
+  background: rgb(255 253 247 / 88%);
+  border: 1px solid rgb(82 66 43 / 16%);
+  border-radius: 1rem;
+  box-shadow: 0 0.22rem 0 #d7cab4;
+  margin: 1.25rem auto 0;
+  max-width: 35rem;
+  padding: 1rem;
+}
+
+.move-composer__word {
+  align-items: baseline;
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+  min-height: 2.25rem;
+}
+
+.move-composer__word span {
+  color: var(--ink-muted);
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.move-composer__word strong {
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: clamp(1.35rem, 5vw, 2rem);
+  letter-spacing: 0.08em;
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+
+.move-actions {
+  display: flex;
+  gap: 0.65rem;
+  justify-content: flex-end;
+  margin-top: 0.75rem;
+}
+
+.move-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.move-hint,
+.move-error {
+  font-size: 0.85rem;
+  line-height: 1.45;
+  margin: 0.85rem 0 0;
+}
+
+.move-hint {
+  color: var(--ink-muted);
+}
+
+.move-error {
+  color: #933f3a;
+  font-weight: 700;
 }
 
 .board-footer {
@@ -535,5 +630,19 @@ h1 {
   .board-footer {
     align-items: start;
     flex-direction: column;
+  }
+
+  .move-composer__word {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+
+  .move-composer__word strong {
+    text-align: left;
+  }
+
+  .move-actions > * {
+    flex: 1;
   }
 }

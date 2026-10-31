@@ -219,6 +219,110 @@ func TestGetGameReportsUnauthorizedAndMissingStates(t *testing.T) {
 	assertAPIError(t, response, http.StatusNotFound, "game_not_found")
 }
 
+func TestSubmitMovePersistsDerivedWordAndProtectsOwnership(t *testing.T) {
+	handler, repository, _ := newIntegrationHandler(t, true)
+	created := createGame(t, handler)
+	playerOneCookie := sessionCookie(t, handler, created.GameID, created.PlayerOneToken)
+	playerTwoCookie := sessionCookie(t, handler, created.GameID, created.PlayerTwoToken)
+	initial := loadGame(t, handler, created.GameID, playerOneCookie)
+
+	first := submitMove(t, handler, created.GameID, playerOneCookie, []int{0, 1, 5}, 0)
+	firstView := decodeGameView(t, first, http.StatusOK)
+	if firstView.Version != 1 || firstView.ActivePlayer != 2 || firstView.Scores.PlayerOne != 3 {
+		t.Fatalf("first move state = version %d, active %d, scores %#v", firstView.Version, firstView.ActivePlayer, firstView.Scores)
+	}
+	if !firstView.Tiles[0].Protected || firstView.Tiles[0].Owner != 1 {
+		t.Fatalf("corner after first move = %#v, want protected Player 1 tile", firstView.Tiles[0])
+	}
+
+	second := submitMove(t, handler, created.GameID, playerTwoCookie, []int{0, 2, 3, 4}, 1)
+	secondView := decodeGameView(t, second, http.StatusOK)
+	if secondView.Version != 2 || secondView.ActivePlayer != 1 || secondView.Scores.PlayerOne != 3 || secondView.Scores.PlayerTwo != 3 {
+		t.Fatalf("second move state = version %d, active %d, scores %#v", secondView.Version, secondView.ActivePlayer, secondView.Scores)
+	}
+	if secondView.Tiles[0].Owner != 1 || !secondView.Tiles[0].Protected {
+		t.Fatalf("opponent changed protected corner: %#v", secondView.Tiles[0])
+	}
+	for _, index := range []int{2, 3, 4} {
+		if secondView.Tiles[index].Owner != 2 {
+			t.Fatalf("tile %d owner = %d, want Player 2", index, secondView.Tiles[index].Owner)
+		}
+	}
+
+	moves, err := repository.ListMoves(context.Background(), created.GameID)
+	if err != nil {
+		t.Fatalf("list moves: %v", err)
+	}
+	if len(moves) != 2 {
+		t.Fatalf("move count = %d, want 2", len(moves))
+	}
+	wantFirstWord := initial.Tiles[0].Letter + initial.Tiles[1].Letter + initial.Tiles[5].Letter
+	wantSecondWord := initial.Tiles[0].Letter + initial.Tiles[2].Letter + initial.Tiles[3].Letter + initial.Tiles[4].Letter
+	if moves[0].Word != wantFirstWord || moves[1].Word != wantSecondWord {
+		t.Fatalf("stored words = %q/%q, want %q/%q", moves[0].Word, moves[1].Word, wantFirstWord, wantSecondWord)
+	}
+}
+
+func TestSubmitMoveReturnsStructuredRuleAndVersionErrors(t *testing.T) {
+	handler, repository, _ := newIntegrationHandler(t, true)
+	created := createGame(t, handler)
+	playerOneCookie := sessionCookie(t, handler, created.GameID, created.PlayerOneToken)
+	playerTwoCookie := sessionCookie(t, handler, created.GameID, created.PlayerTwoToken)
+
+	assertAPIError(t, submitMove(t, handler, created.GameID, nil, []int{0}, 0), http.StatusUnauthorized, "unauthorized")
+	assertAPIError(t, submitMove(t, handler, created.GameID, playerOneCookie, []int{0, 0}, 0), http.StatusUnprocessableEntity, "duplicate_tile")
+	assertAPIError(t, submitMove(t, handler, created.GameID, playerOneCookie, nil, 0), http.StatusUnprocessableEntity, "invalid_word")
+	assertAPIError(t, submitMove(t, handler, created.GameID, playerOneCookie, []int{25}, 0), http.StatusUnprocessableEntity, "invalid_tile")
+	assertAPIError(t, submitMove(t, handler, created.GameID, playerTwoCookie, []int{0}, 0), http.StatusConflict, "out_of_turn")
+
+	decodeGameView(t, submitMove(t, handler, created.GameID, playerOneCookie, []int{0, 1, 2}, 0), http.StatusOK)
+	assertAPIError(t, submitMove(t, handler, created.GameID, playerTwoCookie, []int{0, 1, 2}, 1), http.StatusUnprocessableEntity, "repeated_word")
+	assertAPIError(t, submitMove(t, handler, created.GameID, playerTwoCookie, []int{0, 1}, 1), http.StatusUnprocessableEntity, "prefix_word")
+	assertAPIError(t, submitMove(t, handler, created.GameID, playerTwoCookie, []int{3, 4}, 0), http.StatusConflict, "version_conflict")
+
+	moves, err := repository.ListMoves(context.Background(), created.GameID)
+	if err != nil {
+		t.Fatalf("list moves: %v", err)
+	}
+	if len(moves) != 1 {
+		t.Fatalf("rejected requests persisted %d moves, want 1", len(moves))
+	}
+}
+
+func TestConcurrentDoubleSubmissionCreatesOneTurn(t *testing.T) {
+	handler, repository, _ := newIntegrationHandler(t, true)
+	created := createGame(t, handler)
+	cookie := sessionCookie(t, handler, created.GameID, created.PlayerOneToken)
+
+	start := make(chan struct{})
+	responses := make(chan *httptest.ResponseRecorder, 2)
+	for _, indexes := range [][]int{{0, 1}, {2, 3}} {
+		indexes := indexes
+		go func() {
+			<-start
+			responses <- submitMove(t, handler, created.GameID, cookie, indexes, 0)
+		}()
+	}
+	close(start)
+	first, second := <-responses, <-responses
+	statuses := []int{first.Code, second.Code}
+	if !((statuses[0] == http.StatusOK && statuses[1] == http.StatusConflict) || (statuses[1] == http.StatusOK && statuses[0] == http.StatusConflict)) {
+		t.Fatalf("concurrent statuses = %v, want 200 and 409", statuses)
+	}
+	conflict := first
+	if conflict.Code == http.StatusOK {
+		conflict = second
+	}
+	assertAPIError(t, conflict, http.StatusConflict, "version_conflict")
+	moves, err := repository.ListMoves(context.Background(), created.GameID)
+	if err != nil {
+		t.Fatalf("list moves: %v", err)
+	}
+	if len(moves) != 1 {
+		t.Fatalf("move count = %d, want 1", len(moves))
+	}
+}
+
 func TestLocalDevelopmentCanDisableSecureCookie(t *testing.T) {
 	handler, _, _ := newIntegrationHandler(t, false)
 	created := createGame(t, handler)
@@ -317,7 +421,9 @@ func sessionCookie(t *testing.T, handler http.Handler, gameID, token string) *ht
 func loadGame(t *testing.T, handler http.Handler, gameID string, cookie *http.Cookie) app.GameView {
 	t.Helper()
 	request := httptest.NewRequest(http.MethodGet, testOrigin+"/api/v1/games/"+gameID, nil)
-	request.AddCookie(cookie)
+	if cookie != nil {
+		request.AddCookie(cookie)
+	}
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusOK {
@@ -325,6 +431,41 @@ func loadGame(t *testing.T, handler http.Handler, gameID string, cookie *http.Co
 	}
 	if response.Header().Get("Cache-Control") != "no-store" {
 		t.Fatalf("Cache-Control = %q, want no-store", response.Header().Get("Cache-Control"))
+	}
+	var body struct {
+		Data app.GameView `json:"data"`
+	}
+	decodeResponse(t, response, &body)
+	return body.Data
+}
+
+func submitMove(
+	t *testing.T,
+	handler http.Handler,
+	gameID string,
+	cookie *http.Cookie,
+	tileIndexes []int,
+	expectedVersion int64,
+) *httptest.ResponseRecorder {
+	t.Helper()
+	body, err := json.Marshal(map[string]any{"tileIndexes": tileIndexes, "expectedVersion": expectedVersion})
+	if err != nil {
+		t.Fatalf("encode move request: %v", err)
+	}
+	request := newMutationRequest(http.MethodPost, fmt.Sprintf("/api/v1/games/%s/moves", gameID), bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	if cookie != nil {
+		request.AddCookie(cookie)
+	}
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	return response
+}
+
+func decodeGameView(t *testing.T, response *httptest.ResponseRecorder, status int) app.GameView {
+	t.Helper()
+	if response.Code != status {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, status, response.Body.String())
 	}
 	var body struct {
 		Data app.GameView `json:"data"`

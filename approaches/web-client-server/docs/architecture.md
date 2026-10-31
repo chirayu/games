@@ -37,6 +37,13 @@ server authenticates the player, checks turn and version, validates and applies
 the move, records it, and updates game state. A stale version returns a conflict
 without changing state.
 
+The move repository starts an immediate write transaction before loading the
+game, capability, and ordered move history. The application reconstructs the
+pure domain game inside that transaction, derives the word from stored letters,
+and returns the accepted move and resulting state for one atomic write. This
+serializes competing writers so a double submission produces one accepted turn
+and one version conflict rather than duplicate history.
+
 SQLite schema changes are ordered Goose migrations embedded in the service.
 sqlc generates the typed query layer from those migrations and hand-written
 queries. Connections enable foreign keys, use a five-second busy timeout, and
@@ -75,6 +82,12 @@ protection are derived by the domain package from tile ownership on every read,
 so clients receive a deterministic view without duplicating game rules. Game
 responses are marked `no-store`; a missing or invalid session is unauthorized,
 while an unknown game has a distinct not-found response.
+
+`POST /api/v1/games/{gameID}/moves` accepts ordered tile indexes and an expected
+version, never a client-provided word. Successful responses contain the updated
+authoritative game view. Rule failures use stable error codes for duplicate or
+invalid tiles, repeated or prefix words, turn violations, completed games, and
+version conflicts.
 
 ## Client recovery
 

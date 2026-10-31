@@ -30,13 +30,16 @@ var (
 	ErrGameNotFound = errors.New("game not found")
 	// ErrUnauthorized means the game-scoped player session is absent or invalid.
 	ErrUnauthorized = errors.New("unauthorized game session")
+	// ErrVersionConflict means the client submitted against stale game state.
+	ErrVersionConflict = errors.New("game version conflict")
 )
 
-// Store is the persistence needed by the game creation and session flows.
+// Store is the persistence needed by the application service.
 type Store interface {
 	CreateGame(context.Context, sqlite.Game, [2]sqlite.Player) error
 	GetGame(context.Context, string) (sqlite.Game, error)
 	GetPlayerByTokenHash(context.Context, string, [32]byte) (sqlite.Player, error)
+	TransactMove(context.Context, string, [32]byte, int64, sqlite.MoveOperation) error
 }
 
 // CreatedGame contains the raw capabilities returned exactly once at creation.
@@ -212,6 +215,82 @@ func (service *Service) GetGame(ctx context.Context, gameID, token string) (Game
 		Scores:       Scores{PlayerOne: analysis.PlayerOneScore, PlayerTwo: analysis.PlayerTwoScore},
 		ActivePlayer: stored.CurrentPlayer, PlayerSeat: player.Seat, Version: stored.Version, Status: stored.Status,
 	}, nil
+}
+
+// SubmitMove authenticates and applies one versioned move transaction.
+func (service *Service) SubmitMove(
+	ctx context.Context,
+	gameID, token string,
+	tileIndexes []int,
+	expectedVersion int64,
+) (GameView, error) {
+	tokenHash, ok := invitationHash(token)
+	if !ok {
+		return GameView{}, ErrUnauthorized
+	}
+	err := service.store.TransactMove(ctx, gameID, tokenHash, expectedVersion, func(
+		stored sqlite.Game,
+		player sqlite.Player,
+		storedMoves []sqlite.Move,
+	) (sqlite.Move, sqlite.GameState, error) {
+		owners := make([]game.Player, len(stored.TileOwners))
+		for index, owner := range stored.TileOwners {
+			owners[index] = game.Player(owner)
+		}
+		moves := make([]game.Move, 0, len(storedMoves))
+		for _, storedMove := range storedMoves {
+			indexes := make([]int, len(storedMove.TileIndexes))
+			for index, tileIndex := range storedMove.TileIndexes {
+				indexes[index] = int(tileIndex)
+				if int64(indexes[index]) != tileIndex {
+					return sqlite.Move{}, sqlite.GameState{}, fmt.Errorf("stored tile index %d overflows int", tileIndex)
+				}
+			}
+			moves = append(moves, game.Move{
+				Player: game.Player(storedMove.Player), TileIndexes: indexes,
+				Word: storedMove.Word, TurnNumber: int(storedMove.TurnNumber),
+			})
+		}
+		restored, err := game.Restore(game.Snapshot{
+			Width: game.DefaultWidth, Height: game.DefaultHeight,
+			Letters: stored.BoardLetters, Owners: owners,
+			CurrentPlayer: game.Player(stored.CurrentPlayer), Status: game.Status(stored.Status), Moves: moves,
+		}, game.MVPWordValidator{})
+		if err != nil {
+			return sqlite.Move{}, sqlite.GameState{}, fmt.Errorf("restore game for move: %w", err)
+		}
+		accepted, err := restored.Play(game.Player(player.Seat), tileIndexes)
+		if err != nil {
+			return sqlite.Move{}, sqlite.GameState{}, err
+		}
+		persistedIndexes := make([]int64, len(accepted.TileIndexes))
+		for index, tileIndex := range accepted.TileIndexes {
+			persistedIndexes[index] = int64(tileIndex)
+		}
+		ownersAfter := make([]byte, restored.Board().Len())
+		for index, tile := range restored.Board().Tiles() {
+			ownersAfter[index] = byte(tile.Owner)
+		}
+		playedAt := service.now().UTC()
+		return sqlite.Move{
+			GameID: gameID, Player: int64(accepted.Player), TurnNumber: int64(accepted.TurnNumber),
+			TileIndexes: persistedIndexes, Word: accepted.Word, CreatedAt: playedAt,
+		}, sqlite.GameState{
+			TileOwners: ownersAfter, CurrentPlayer: int64(restored.CurrentPlayer()),
+			Status: string(restored.Status()), UpdatedAt: playedAt,
+		}, nil
+	})
+	switch {
+	case errors.Is(err, sqlite.ErrGameNotFound):
+		return GameView{}, ErrGameNotFound
+	case errors.Is(err, sqlite.ErrPlayerNotFound):
+		return GameView{}, ErrUnauthorized
+	case errors.Is(err, sqlite.ErrVersionConflict):
+		return GameView{}, ErrVersionConflict
+	case err != nil:
+		return GameView{}, err
+	}
+	return service.GetGame(ctx, gameID, token)
 }
 
 func (service *Service) playerToken() (string, [32]byte, error) {
