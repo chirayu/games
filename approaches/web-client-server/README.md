@@ -20,6 +20,7 @@ sqlc setup will be added with the persistence work.
 ```text
 backend/
   cmd/server/
+  internal/game/
   internal/httpapi/
 frontend/
   src/api/
@@ -81,9 +82,9 @@ Use `pnpm format:check` when checking formatting without changing files.
 
 ## Development status
 
-The Go HTTP service, health endpoint, Vue application, router, Vite development
-proxy, and focused backend and frontend tests are in place. Game rules,
-persistence, and gameplay flows are intentionally reserved for later tickets.
+The pure Go game engine, HTTP service health endpoint, Vue application, router,
+Vite development proxy, and focused backend and frontend tests are in place.
+Persistence and gameplay flows are intentionally reserved for later tickets.
 
 ## Documentation
 
