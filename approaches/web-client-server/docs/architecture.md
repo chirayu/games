@@ -89,12 +89,22 @@ authoritative game view. Rule failures use stable error codes for duplicate or
 invalid tiles, repeated or prefix words, turn violations, completed games, and
 version conflicts.
 
+Authenticated game views include immutable move history. Completed views also
+include the final scores and either a winning seat or a tie. The final move,
+completed status, ownership, version increment, and history row are committed
+in the same immediate SQLite transaction; later moves are rejected.
+
 ## Client recovery
 
-The client treats server state as authoritative. A selected, unsubmitted move
-may be saved locally with the game ID and version so a transient network error
-does not discard it. The draft is removed after success and discarded if the
-server version changes.
+The client treats server state as authoritative. It refreshes on initial load,
+window focus, and return to a visible page. While visible and waiting for the
+opponent it polls every 30 seconds; it stops the timer while hidden. A selected,
+unsubmitted move is saved in browser-local storage with the game ID and version
+so a transient network error or browser restart does not discard it. The draft
+is removed after success and discarded with an explanation if the server
+version changes. Games have no automatic expiry in the MVP, while the
+game-scoped HttpOnly player cookie lasts 180 days and can be restored from the
+private invitation link.
 
 ## Production shape
 

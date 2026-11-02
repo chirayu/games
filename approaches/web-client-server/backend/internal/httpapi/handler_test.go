@@ -60,7 +60,6 @@ func TestHealthRejectsOtherMethods(t *testing.T) {
 func TestCreateGameAndExchangeDistinctPlayerSessions(t *testing.T) {
 	handler, repository, now := newIntegrationHandler(t, true)
 	created := createGame(t, handler)
-
 	if created.PlayerOneToken == created.PlayerTwoToken {
 		t.Fatal("player invitation tokens are identical")
 	}
@@ -159,6 +158,10 @@ func TestSessionRejectsModifiedAndCrossGameSecrets(t *testing.T) {
 func TestGetGameReturnsSharedBoardWithPlayerPerspective(t *testing.T) {
 	handler, repository, now := newIntegrationHandler(t, true)
 	created := createGame(t, handler)
+	stored, err := repository.GetGame(context.Background(), created.GameID)
+	if err != nil {
+		t.Fatalf("get created game: %v", err)
+	}
 	owners := make([]byte, 25)
 	for _, index := range []int{0, 1, 5} {
 		owners[index] = 1
@@ -167,7 +170,8 @@ func TestGetGameReturnsSharedBoardWithPlayerPerspective(t *testing.T) {
 		owners[index] = 2
 	}
 	if err := repository.ApplyMove(context.Background(), created.GameID, 0, sqlite.Move{
-		GameID: created.GameID, Player: 1, TurnNumber: 1, TileIndexes: []int64{0, 1, 5}, Word: "ABC", CreatedAt: now,
+		GameID: created.GameID, Player: 1, TurnNumber: 1, TileIndexes: []int64{0, 1, 5},
+		Word: string([]byte{stored.BoardLetters[0], stored.BoardLetters[1], stored.BoardLetters[5]}), CreatedAt: now,
 	}, sqlite.GameState{TileOwners: owners, CurrentPlayer: 2, Status: "active", UpdatedAt: now}); err != nil {
 		t.Fatalf("seed game state: %v", err)
 	}
@@ -320,6 +324,69 @@ func TestConcurrentDoubleSubmissionCreatesOneTurn(t *testing.T) {
 	}
 	if len(moves) != 1 {
 		t.Fatalf("move count = %d, want 1", len(moves))
+	}
+}
+
+func TestFinalMovePersistsWinnerHistoryAndRejectsFurtherPlay(t *testing.T) {
+	handler, repository, _ := newIntegrationHandler(t, true)
+	created := createGame(t, handler)
+	playerOneCookie := sessionCookie(t, handler, created.GameID, created.PlayerOneToken)
+	playerTwoCookie := sessionCookie(t, handler, created.GameID, created.PlayerTwoToken)
+	indexes := make([]int, 25)
+	for index := range indexes {
+		indexes[index] = index
+	}
+
+	completed := decodeGameView(t, submitMove(t, handler, created.GameID, playerOneCookie, indexes, 0), http.StatusOK)
+	if completed.Status != "completed" || completed.Version != 1 || completed.Result == nil {
+		t.Fatalf("completed state = status %q version %d result %#v", completed.Status, completed.Version, completed.Result)
+	}
+	if completed.Result.Winner != 1 || completed.Result.Tie || completed.Result.PlayerOneScore != 25 || completed.Result.PlayerTwoScore != 0 {
+		t.Fatalf("result = %#v, want Player 1 25-0", completed.Result)
+	}
+	if len(completed.Moves) != 1 || completed.Moves[0].TurnNumber != 1 || len(completed.Moves[0].TileIndexes) != 25 {
+		t.Fatalf("move history = %#v, want one complete-board move", completed.Moves)
+	}
+
+	playerTwo := loadGame(t, handler, created.GameID, playerTwoCookie)
+	if !reflect.DeepEqual(completed.Result, playerTwo.Result) || !reflect.DeepEqual(completed.Moves, playerTwo.Moves) {
+		t.Fatalf("players received different final views: %#v / %#v", completed, playerTwo)
+	}
+	assertAPIError(t, submitMove(t, handler, created.GameID, playerOneCookie, []int{0}, 1), http.StatusConflict, "game_completed")
+
+	stored, err := repository.GetGame(context.Background(), created.GameID)
+	if err != nil {
+		t.Fatalf("get completed game: %v", err)
+	}
+	if stored.Status != "completed" || stored.Version != 1 {
+		t.Fatalf("stored final state = status %q version %d", stored.Status, stored.Version)
+	}
+}
+
+func TestGameAndSessionResumeAfterRepositoryRestart(t *testing.T) {
+	databasePath := filepath.Join(t.TempDir(), "letterpress.db")
+	repository, err := sqlite.Open(context.Background(), databasePath)
+	if err != nil {
+		t.Fatalf("open repository: %v", err)
+	}
+	now := time.Date(2026, time.November, 2, 8, 0, 0, 0, time.UTC)
+	handler := NewHandler(app.NewService(repository), Config{InsecureCookies: true, Now: func() time.Time { return now }})
+	created := createGame(t, handler)
+	cookie := sessionCookie(t, handler, created.GameID, created.PlayerOneToken)
+	before := loadGame(t, handler, created.GameID, cookie)
+	if err := repository.Close(); err != nil {
+		t.Fatalf("close repository: %v", err)
+	}
+
+	reopened, err := sqlite.Open(context.Background(), databasePath)
+	if err != nil {
+		t.Fatalf("reopen repository: %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	restartedHandler := NewHandler(app.NewService(reopened), Config{InsecureCookies: true, Now: func() time.Time { return now.Add(time.Hour) }})
+	after := loadGame(t, restartedHandler, created.GameID, cookie)
+	if !reflect.DeepEqual(before, after) {
+		t.Fatalf("state changed across restart:\nbefore: %#v\nafter: %#v", before, after)
 	}
 }
 

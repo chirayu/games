@@ -44,6 +44,22 @@ export interface GameState {
   playerSeat: 1 | 2;
   version: number;
   status: "active" | "completed";
+  moves: GameMove[];
+  result?: GameResult;
+}
+
+export interface GameMove {
+  player: 1 | 2;
+  turnNumber: number;
+  tileIndexes: number[];
+  word: string;
+}
+
+export interface GameResult {
+  playerOneScore: number;
+  playerTwoScore: number;
+  winner: 0 | 1 | 2;
+  tie: boolean;
 }
 
 export class APIError extends Error {

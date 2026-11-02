@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useRoute } from "vue-router";
 
 import {
@@ -18,7 +18,11 @@ const state = ref<ViewState>("loading");
 const game = ref<GameState>();
 const selectedIndexes = ref<number[]>([]);
 const submitting = ref(false);
+const refreshing = ref(false);
 const moveError = ref("");
+const syncMessage = ref("");
+const draftKey = `letterpress:draft:${gameID}`;
+let pollTimer: number | undefined;
 
 const canPlay = computed(
   () =>
@@ -45,21 +49,146 @@ const playHint = computed(() =>
     : "Wait for the other player’s move.",
 );
 
-onMounted(load);
+const resultHeading = computed(() => {
+  if (!game.value?.result) return "";
+  if (game.value.result.tie) return "It’s a tie";
+  if (game.value.result.winner === game.value.playerSeat) return "You won";
+  return `Player ${game.value.result.winner} won`;
+});
+
+onMounted(async () => {
+  await load();
+  window.addEventListener("focus", handleFocus);
+  document.addEventListener("visibilitychange", handleVisibility);
+  syncPolling();
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener("focus", handleFocus);
+  document.removeEventListener("visibilitychange", handleVisibility);
+  stopPolling();
+});
 
 async function load() {
   state.value = "loading";
   selectedIndexes.value = [];
   moveError.value = "";
+  syncMessage.value = "";
+  await refreshGame(true);
+}
+
+async function refreshGame(initial = false, stale = false) {
+  if (refreshing.value) return;
+  refreshing.value = true;
   try {
-    game.value = await getGame(gameID);
+    const previousVersion = game.value?.version;
+    const latest = await getGame(gameID);
+    game.value = latest;
     state.value = "ready";
+    if (initial) restoreDraft(latest);
+    else if (
+      previousVersion !== undefined &&
+      latest.version !== previousVersion &&
+      selectedIndexes.value.length > 0
+    ) {
+      discardDraft();
+      syncMessage.value = stale
+        ? "The board changed before your move. Your saved selection was cleared."
+        : "The board was updated, so your saved selection was cleared.";
+    } else if (latest.version !== previousVersion) {
+      syncMessage.value = "Latest move received.";
+    } else if (!stale) {
+      syncMessage.value = "";
+    }
   } catch (error) {
     const status = (error as { status?: number }).status;
-    if (status === 401) state.value = "unauthorized";
-    else if (status === 404) state.value = "not-found";
-    else state.value = "error";
+    if (initial) {
+      if (status === 401) state.value = "unauthorized";
+      else if (status === 404) state.value = "not-found";
+      else state.value = "error";
+    } else {
+      syncMessage.value =
+        "You appear to be offline. Your selection is saved on this device.";
+    }
+  } finally {
+    refreshing.value = false;
+    syncPolling();
   }
+}
+
+function restoreDraft(latest: GameState) {
+  try {
+    const raw = localStorage.getItem(draftKey);
+    if (!raw) return;
+    const draft = JSON.parse(raw) as {
+      version?: number;
+      tileIndexes?: number[];
+    };
+    if (draft.version !== latest.version) {
+      discardDraft();
+      syncMessage.value =
+        "The board changed while you were away, so an older saved selection was cleared.";
+      return;
+    }
+    if (latest.status !== "active" || latest.activePlayer !== latest.playerSeat)
+      return;
+    selectedIndexes.value = (draft.tileIndexes ?? []).filter(
+      (index, position, indexes) =>
+        Number.isInteger(index) &&
+        index >= 0 &&
+        index < latest.tiles.length &&
+        indexes.indexOf(index) === position,
+    );
+  } catch {
+    discardDraft();
+  }
+}
+
+function saveDraft() {
+  if (!game.value || selectedIndexes.value.length === 0) {
+    discardDraft();
+    return;
+  }
+  localStorage.setItem(
+    draftKey,
+    JSON.stringify({
+      version: game.value.version,
+      tileIndexes: selectedIndexes.value,
+    }),
+  );
+}
+
+function discardDraft() {
+  selectedIndexes.value = [];
+  localStorage.removeItem(draftKey);
+}
+
+function handleFocus() {
+  if (document.visibilityState === "visible") void refreshGame();
+}
+
+function handleVisibility() {
+  if (document.visibilityState === "visible") void refreshGame();
+  syncPolling();
+}
+
+function syncPolling() {
+  const shouldPoll =
+    document.visibilityState === "visible" &&
+    game.value?.status === "active" &&
+    game.value.activePlayer !== game.value.playerSeat;
+  if (!shouldPoll) {
+    stopPolling();
+    return;
+  }
+  if (pollTimer === undefined) {
+    pollTimer = window.setInterval(() => void refreshGame(), 30_000);
+  }
+}
+
+function stopPolling() {
+  if (pollTimer !== undefined) window.clearInterval(pollTimer);
+  pollTimer = undefined;
 }
 
 function ownerName(owner: TileOwner) {
@@ -84,11 +213,12 @@ function toggleTile(index: number) {
   const position = selectedIndexes.value.indexOf(index);
   if (position >= 0) selectedIndexes.value.splice(position, 1);
   else selectedIndexes.value.push(index);
+  saveDraft();
 }
 
 function clearSelection() {
   if (submitting.value) return;
-  selectedIndexes.value = [];
+  discardDraft();
   moveError.value = "";
 }
 
@@ -108,7 +238,9 @@ async function submitSelection() {
       [...selectedIndexes.value],
       game.value.version,
     );
-    selectedIndexes.value = [];
+    discardDraft();
+    syncMessage.value = "Move submitted.";
+    syncPolling();
   } catch (error) {
     const code = (error as { code?: string }).code;
     const messages: Record<string, string> = {
@@ -125,12 +257,9 @@ async function submitSelection() {
     moveError.value =
       messages[code ?? ""] ?? "Your move couldn’t be submitted. Try again.";
     if (code === "version_conflict") {
-      try {
-        game.value = await getGame(gameID);
-        selectedIndexes.value = [];
-      } catch {
-        // Keep the actionable move error; the next explicit retry can reload.
-      }
+      await refreshGame(false, true);
+    } else {
+      saveDraft();
     }
   } finally {
     submitting.value = false;
@@ -210,6 +339,32 @@ async function submitSelection() {
         </article>
       </div>
 
+      <section
+        v-if="game.status === 'completed' && game.result"
+        class="result-card"
+        aria-labelledby="result-title"
+      >
+        <p class="eyebrow">Final result</p>
+        <h2 id="result-title">{{ resultHeading }}</h2>
+        <p>
+          Player 1 {{ game.result.playerOneScore }} · Player 2
+          {{ game.result.playerTwoScore }}
+        </p>
+      </section>
+
+      <div v-if="syncMessage || refreshing" class="sync-status" role="status">
+        <span v-if="refreshing" class="loading-mark" aria-hidden="true"></span>
+        {{ refreshing ? "Checking for the latest move…" : syncMessage }}
+        <button
+          v-if="!refreshing && syncMessage.includes('offline')"
+          class="text-button"
+          type="button"
+          @click="refreshGame()"
+        >
+          Retry now
+        </button>
+      </div>
+
       <div
         class="letter-board"
         role="grid"
@@ -282,6 +437,16 @@ async function submitSelection() {
         </p>
         <p v-if="moveError" class="move-error" role="alert">{{ moveError }}</p>
       </section>
+
+      <details v-if="game.moves.length" class="move-history">
+        <summary>Move history ({{ game.moves.length }})</summary>
+        <ol>
+          <li v-for="move in game.moves" :key="move.turnNumber">
+            <span>Player {{ move.player }}</span>
+            <strong>{{ move.word }}</strong>
+          </li>
+        </ol>
+      </details>
 
       <footer class="board-footer">
         <div class="legend" aria-label="Board legend">

@@ -38,6 +38,7 @@ var (
 type Store interface {
 	CreateGame(context.Context, sqlite.Game, [2]sqlite.Player) error
 	GetGame(context.Context, string) (sqlite.Game, error)
+	ListMoves(context.Context, string) ([]sqlite.Move, error)
 	GetPlayerByTokenHash(context.Context, string, [32]byte) (sqlite.Player, error)
 	TransactMove(context.Context, string, [32]byte, int64, sqlite.MoveOperation) error
 }
@@ -59,15 +60,33 @@ type Session struct {
 
 // GameView is the authenticated, derived state returned to a player.
 type GameView struct {
-	ID           string     `json:"id"`
-	Width        int        `json:"width"`
-	Height       int        `json:"height"`
-	Tiles        []GameTile `json:"tiles"`
-	Scores       Scores     `json:"scores"`
-	ActivePlayer int64      `json:"activePlayer"`
-	PlayerSeat   int64      `json:"playerSeat"`
-	Version      int64      `json:"version"`
-	Status       string     `json:"status"`
+	ID           string      `json:"id"`
+	Width        int         `json:"width"`
+	Height       int         `json:"height"`
+	Tiles        []GameTile  `json:"tiles"`
+	Scores       Scores      `json:"scores"`
+	ActivePlayer int64       `json:"activePlayer"`
+	PlayerSeat   int64       `json:"playerSeat"`
+	Version      int64       `json:"version"`
+	Status       string      `json:"status"`
+	Moves        []MoveView  `json:"moves"`
+	Result       *GameResult `json:"result,omitempty"`
+}
+
+// MoveView is an accepted move in turn order. The server derives every word.
+type MoveView struct {
+	Player      int64  `json:"player"`
+	TurnNumber  int64  `json:"turnNumber"`
+	TileIndexes []int  `json:"tileIndexes"`
+	Word        string `json:"word"`
+}
+
+// GameResult describes the immutable outcome of a completed game.
+type GameResult struct {
+	PlayerOneScore int   `json:"playerOneScore"`
+	PlayerTwoScore int   `json:"playerTwoScore"`
+	Winner         int64 `json:"winner"`
+	Tie            bool  `json:"tie"`
 }
 
 // GameTile is one row-major tile in an authenticated game response.
@@ -196,6 +215,22 @@ func (service *Service) GetGame(ctx context.Context, gameID, token string) (Game
 	for index, owner := range stored.TileOwners {
 		owners[index] = game.Player(owner)
 	}
+	storedMoves, err := service.store.ListMoves(ctx, gameID)
+	if err != nil {
+		return GameView{}, fmt.Errorf("list game moves: %w", err)
+	}
+	domainMoves, moveViews, err := restoreMoves(storedMoves)
+	if err != nil {
+		return GameView{}, fmt.Errorf("read game moves: %w", err)
+	}
+	restored, err := game.Restore(game.Snapshot{
+		Width: game.DefaultWidth, Height: game.DefaultHeight,
+		Letters: stored.BoardLetters, Owners: owners,
+		CurrentPlayer: game.Player(stored.CurrentPlayer), Status: game.Status(stored.Status), Moves: domainMoves,
+	}, game.MVPWordValidator{})
+	if err != nil {
+		return GameView{}, fmt.Errorf("restore stored game: %w", err)
+	}
 	analysis, err := game.AnalyzeOwnership(game.DefaultWidth, game.DefaultHeight, owners)
 	if err != nil {
 		return GameView{}, fmt.Errorf("analyze stored game: %w", err)
@@ -210,11 +245,19 @@ func (service *Service) GetGame(ctx context.Context, gameID, token string) (Game
 			Index: index, Letter: string([]byte{letter}), Owner: int64(owners[index]), Protected: analysis.Protected[index],
 		}
 	}
-	return GameView{
+	view := GameView{
 		ID: gameID, Width: game.DefaultWidth, Height: game.DefaultHeight, Tiles: tiles,
 		Scores:       Scores{PlayerOne: analysis.PlayerOneScore, PlayerTwo: analysis.PlayerTwoScore},
 		ActivePlayer: stored.CurrentPlayer, PlayerSeat: player.Seat, Version: stored.Version, Status: stored.Status,
-	}, nil
+		Moves: moveViews,
+	}
+	if outcome, ok := restored.Outcome(); ok {
+		view.Result = &GameResult{
+			PlayerOneScore: outcome.PlayerOneScore, PlayerTwoScore: outcome.PlayerTwoScore,
+			Winner: int64(outcome.Winner), Tie: outcome.Tie,
+		}
+	}
+	return view, nil
 }
 
 // SubmitMove authenticates and applies one versioned move transaction.
@@ -237,19 +280,9 @@ func (service *Service) SubmitMove(
 		for index, owner := range stored.TileOwners {
 			owners[index] = game.Player(owner)
 		}
-		moves := make([]game.Move, 0, len(storedMoves))
-		for _, storedMove := range storedMoves {
-			indexes := make([]int, len(storedMove.TileIndexes))
-			for index, tileIndex := range storedMove.TileIndexes {
-				indexes[index] = int(tileIndex)
-				if int64(indexes[index]) != tileIndex {
-					return sqlite.Move{}, sqlite.GameState{}, fmt.Errorf("stored tile index %d overflows int", tileIndex)
-				}
-			}
-			moves = append(moves, game.Move{
-				Player: game.Player(storedMove.Player), TileIndexes: indexes,
-				Word: storedMove.Word, TurnNumber: int(storedMove.TurnNumber),
-			})
+		moves, _, err := restoreMoves(storedMoves)
+		if err != nil {
+			return sqlite.Move{}, sqlite.GameState{}, err
 		}
 		restored, err := game.Restore(game.Snapshot{
 			Width: game.DefaultWidth, Height: game.DefaultHeight,
@@ -291,6 +324,29 @@ func (service *Service) SubmitMove(
 		return GameView{}, err
 	}
 	return service.GetGame(ctx, gameID, token)
+}
+
+func restoreMoves(storedMoves []sqlite.Move) ([]game.Move, []MoveView, error) {
+	domainMoves := make([]game.Move, 0, len(storedMoves))
+	views := make([]MoveView, 0, len(storedMoves))
+	for _, storedMove := range storedMoves {
+		indexes := make([]int, len(storedMove.TileIndexes))
+		for index, tileIndex := range storedMove.TileIndexes {
+			indexes[index] = int(tileIndex)
+			if int64(indexes[index]) != tileIndex {
+				return nil, nil, fmt.Errorf("stored tile index %d overflows int", tileIndex)
+			}
+		}
+		domainMoves = append(domainMoves, game.Move{
+			Player: game.Player(storedMove.Player), TileIndexes: append([]int(nil), indexes...),
+			Word: storedMove.Word, TurnNumber: int(storedMove.TurnNumber),
+		})
+		views = append(views, MoveView{
+			Player: storedMove.Player, TurnNumber: storedMove.TurnNumber,
+			TileIndexes: indexes, Word: storedMove.Word,
+		})
+	}
+	return domainMoves, views, nil
 }
 
 func (service *Service) playerToken() (string, [32]byte, error) {

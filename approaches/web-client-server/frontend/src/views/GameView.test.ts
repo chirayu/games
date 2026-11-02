@@ -1,4 +1,4 @@
-import { flushPromises, mount } from "@vue/test-utils";
+import { enableAutoUnmount, flushPromises, mount } from "@vue/test-utils";
 import { createMemoryHistory, createRouter } from "vue-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -11,6 +11,8 @@ vi.mock("../api/games", async (importOriginal) => ({
   getGame: api.getGame,
   submitMove: api.submitMove,
 }));
+
+enableAutoUnmount(afterEach);
 
 function testRouter() {
   return createRouter({
@@ -48,12 +50,19 @@ function gameState(): GameState {
     playerSeat: 1,
     version: 3,
     status: "active",
+    moves: [],
   };
 }
 
 describe("GameView", () => {
   afterEach(() => {
     vi.clearAllMocks();
+    localStorage.clear();
+    vi.useRealTimers();
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      value: "visible",
+    });
   });
 
   it("renders the authoritative board, scores, perspective, and accessible tiles", async () => {
@@ -230,4 +239,104 @@ describe("GameView", () => {
     expect(api.getGame).toHaveBeenCalledTimes(2);
     expect(wrapper.findAll('[role="gridcell"]')).toHaveLength(25);
   });
+
+  it("preserves and restores a selected word after a transient submit failure", async () => {
+    api.getGame.mockResolvedValue(gameState());
+    api.submitMove.mockRejectedValue({ status: 0 });
+    const first = await mountGame();
+    await flushPromises();
+    await first.wrapper.get('[role="gridcell"]').trigger("click");
+    await first.wrapper.get(".move-submit").trigger("click");
+    await flushPromises();
+
+    expect(first.wrapper.get(".move-composer__word strong").text()).toBe("A");
+    expect(localStorage.getItem("letterpress:draft:game-123")).toContain(
+      '"tileIndexes":[0]',
+    );
+    first.wrapper.unmount();
+
+    const second = await mountGame();
+    await flushPromises();
+    expect(second.wrapper.get(".move-composer__word strong").text()).toBe("A");
+    second.wrapper.unmount();
+  });
+
+  it("discards a saved selection when the authoritative version changed", async () => {
+    localStorage.setItem(
+      "letterpress:draft:game-123",
+      JSON.stringify({ version: 2, tileIndexes: [0, 1] }),
+    );
+    api.getGame.mockResolvedValue(gameState());
+    const { wrapper } = await mountGame();
+    await flushPromises();
+
+    expect(wrapper.get(".move-composer__word strong").text()).toBe(
+      "Select tiles",
+    );
+    expect(wrapper.get(".sync-status").text()).toContain(
+      "older saved selection",
+    );
+    expect(localStorage.getItem("letterpress:draft:game-123")).toBeNull();
+    wrapper.unmount();
+  });
+
+  it("polls while waiting, stops while hidden, and refreshes when visible", async () => {
+    vi.useFakeTimers();
+    const waiting = gameState();
+    waiting.playerSeat = 2;
+    api.getGame.mockResolvedValue(waiting);
+    const { wrapper } = await mountGame();
+    await flushPromises();
+    expect(api.getGame).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(api.getGame).toHaveBeenCalledTimes(2);
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      value: "hidden",
+    });
+    document.dispatchEvent(new Event("visibilitychange"));
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(api.getGame).toHaveBeenCalledTimes(2);
+
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      value: "visible",
+    });
+    document.dispatchEvent(new Event("visibilitychange"));
+    await flushPromises();
+    expect(api.getGame).toHaveBeenCalledTimes(3);
+    wrapper.unmount();
+  });
+
+  it.each([
+    { tie: false, winner: 1 as const, heading: "You won" },
+    { tie: true, winner: 0 as const, heading: "It’s a tie" },
+  ])(
+    "renders the completed result and move history",
+    async ({ tie, winner, heading }) => {
+      const completed = gameState();
+      completed.status = "completed";
+      completed.scores = { playerOne: tie ? 2 : 3, playerTwo: 2 };
+      completed.result = {
+        playerOneScore: completed.scores.playerOne,
+        playerTwoScore: completed.scores.playerTwo,
+        winner,
+        tie,
+      };
+      completed.moves = [
+        { player: 1, turnNumber: 1, tileIndexes: [0, 1], word: "AB" },
+      ];
+      api.getGame.mockResolvedValue(completed);
+      const { wrapper } = await mountGame();
+      await flushPromises();
+
+      expect(wrapper.get("#result-title").text()).toBe(heading);
+      expect(wrapper.get(".result-card").text()).toContain(
+        `Player 1 ${completed.scores.playerOne} · Player 2 2`,
+      );
+      expect(wrapper.get(".move-history").text()).toContain("Player 1AB");
+      wrapper.unmount();
+    },
+  );
 });

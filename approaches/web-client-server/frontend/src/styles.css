@@ -350,6 +350,77 @@ h1 {
   font-size: 2rem;
 }
 
+.result-card,
+.sync-status,
+.move-history {
+  background: rgb(255 253 247 / 88%);
+  border: 1px solid rgb(82 66 43 / 16%);
+  border-radius: 1rem;
+  margin: 1rem auto;
+  max-width: 35rem;
+}
+
+.result-card {
+  padding: 1.1rem 1.25rem;
+  text-align: center;
+}
+
+.result-card h2,
+.result-card p {
+  margin: 0.25rem 0;
+}
+
+.sync-status {
+  align-items: center;
+  color: var(--ink-muted);
+  display: flex;
+  font-size: 0.85rem;
+  gap: 0.55rem;
+  justify-content: center;
+  padding: 0.7rem 1rem;
+}
+
+.sync-status .loading-mark {
+  border-width: 2px;
+  height: 1rem;
+  margin: 0;
+  width: 1rem;
+}
+
+.text-button {
+  background: none;
+  border: 0;
+  color: #315d9e;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 800;
+  padding: 0;
+  text-decoration: underline;
+}
+
+.move-history {
+  padding: 0.85rem 1rem;
+}
+
+.move-history summary {
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.move-history ol {
+  list-style: none;
+  margin: 0.8rem 0 0;
+  padding: 0;
+}
+
+.move-history li {
+  align-items: center;
+  border-top: 1px solid rgb(82 66 43 / 12%);
+  display: flex;
+  justify-content: space-between;
+  padding: 0.55rem 0;
+}
+
 .letter-board {
   display: grid;
   gap: clamp(0.3rem, 1.5vw, 0.65rem);

@@ -94,9 +94,11 @@ Use `pnpm format:check` when checking formatting without changing files.
 
 The pure Go game engine, SQLite persistence layer, secure game creation and
 invitation flow, authenticated responsive board, transactional move submission,
-HTTP service, Vue application, router, Vite development proxy, and focused
-backend and frontend tests are in place. Multi-day refresh behavior and final
-results are intentionally reserved for later tickets.
+multi-day focus/visibility refresh and polling, recoverable local move drafts,
+final results and move history, HTTP service, Vue application, router, Vite
+development proxy, and focused backend and frontend tests are in place.
+Two-player browser automation and production packaging are covered by the
+remaining waves.
 
 ## Documentation
 
