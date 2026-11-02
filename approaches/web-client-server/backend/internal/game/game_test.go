@@ -60,6 +60,31 @@ func TestCryptoBoardGeneratorReportsEntropyFailure(t *testing.T) {
 	}
 }
 
+func TestFixedBoardGeneratorIsValidatedAndDeterministic(t *testing.T) {
+	generator, err := NewFixedBoardGenerator("ABCD")
+	if err != nil {
+		t.Fatalf("new fixed generator: %v", err)
+	}
+	first, err := generator.Generate(2, 2)
+	if err != nil {
+		t.Fatalf("generate fixed board: %v", err)
+	}
+	first[0] = 'Z'
+	second, err := generator.Generate(2, 2)
+	if err != nil {
+		t.Fatalf("regenerate fixed board: %v", err)
+	}
+	if string(second) != "ABCD" {
+		t.Fatalf("fixed board = %q, want ABCD", second)
+	}
+	if _, err := NewFixedBoardGenerator("ABC1"); !errors.Is(err, ErrInvalidBoard) {
+		t.Fatalf("invalid letter error = %v, want ErrInvalidBoard", err)
+	}
+	if _, err := generator.Generate(3, 2); !errors.Is(err, ErrInvalidBoard) {
+		t.Fatalf("dimension error = %v, want ErrInvalidBoard", err)
+	}
+}
+
 func TestPlayDerivesLiteralWordFromOrderedNonAdjacentTiles(t *testing.T) {
 	letters := []byte("QBCDEFGHIJKLMNOPQRSTUVWXY")
 	game := newTestGame(t, 5, 5, letters)

@@ -105,19 +105,26 @@ type Scores struct {
 
 // Service coordinates game creation and player authentication.
 type Service struct {
-	store  Store
-	random io.Reader
-	now    func() time.Time
+	store     Store
+	random    io.Reader
+	now       func() time.Time
+	generator game.BoardGenerator
 }
 
 // NewService returns the application service with production-safe randomness.
 func NewService(store Store) *Service {
-	return &Service{store: store, random: rand.Reader, now: time.Now}
+	return NewServiceWithBoardGenerator(store, game.NewCryptoBoardGenerator())
+}
+
+// NewServiceWithBoardGenerator supplies a deterministic generator for tests.
+// Production callers should use NewService.
+func NewServiceWithBoardGenerator(store Store, generator game.BoardGenerator) *Service {
+	return &Service{store: store, random: rand.Reader, now: time.Now, generator: generator}
 }
 
 // CreateGame creates a default game and two independent player capabilities.
 func (service *Service) CreateGame(ctx context.Context) (CreatedGame, error) {
-	domainGame, err := game.NewDefault()
+	domainGame, err := game.New(game.DefaultWidth, game.DefaultHeight, service.generator, game.MVPWordValidator{})
 	if err != nil {
 		return CreatedGame{}, fmt.Errorf("generate game board: %w", err)
 	}

@@ -113,3 +113,13 @@ service with a mounted persistent directory for SQLite. MY-17 prepares the
 container, health checks, environment configuration, backup/restore guidance,
 and a GitHub Actions validation workflow. Deploying to a particular hosting
 provider is out of scope until one is selected.
+
+## Browser validation
+
+The Playwright suite starts an isolated local service with the explicit
+development-only `-fixed-board` option and uses separate browser contexts for
+the two player cookies. Production startup omits that option and retains secure
+random generation. The critical journey covers invitation exchange, shared
+state, alternating moves, session resume, stale-version recovery, and the same
+final result in both clients. Traces, screenshots, and video are retained for
+failed runs.

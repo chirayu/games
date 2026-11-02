@@ -90,6 +90,20 @@ pnpm build
 
 Use `pnpm format:check` when checking formatting without changing files.
 
+Run the deterministic two-player browser journey with:
+
+```sh
+cd approaches/web-client-server/frontend
+pnpm exec playwright install chromium # first run only
+pnpm test:e2e
+```
+
+Playwright starts isolated backend and frontend processes, uses separate browser
+contexts for each player, and retains traces, screenshots, and video under
+`test-results/` when a test fails. The backend's `-fixed-board` option exists
+only for deterministic development and test runs; normal startup continues to
+use cryptographically secure random letters.
+
 ## Development status
 
 The pure Go game engine, SQLite persistence layer, secure game creation and
@@ -97,8 +111,8 @@ invitation flow, authenticated responsive board, transactional move submission,
 multi-day focus/visibility refresh and polling, recoverable local move drafts,
 final results and move history, HTTP service, Vue application, router, Vite
 development proxy, and focused backend and frontend tests are in place.
-Two-player browser automation and production packaging are covered by the
-remaining waves.
+The deterministic two-player Playwright journey is also in place. Production
+packaging is covered by the remaining wave.
 
 ## Documentation
 
