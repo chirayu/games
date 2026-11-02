@@ -14,6 +14,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"letterpress/backend/internal/app"
@@ -54,6 +55,56 @@ func TestHealthRejectsOtherMethods(t *testing.T) {
 
 	if response.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("status code = %d, want %d", response.Code, http.StatusMethodNotAllowed)
+	}
+}
+
+func TestReadinessChecksSQLite(t *testing.T) {
+	handler, repository, _ := newIntegrationHandler(t, true)
+	request := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("ready status = %d, want 200; body = %s", response.Code, response.Body.String())
+	}
+	if err := repository.Close(); err != nil {
+		t.Fatalf("close repository: %v", err)
+	}
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	assertAPIError(t, response, http.StatusServiceUnavailable, "not_ready")
+}
+
+func TestFrontendAssetsAndSPAFallbackShareTheAPIOrigin(t *testing.T) {
+	frontend := fstest.MapFS{
+		"index.html":        {Data: []byte("<html><body>Letterpress app</body></html>")},
+		"assets/app-123.js": {Data: []byte("console.log('ready')")},
+	}
+	handler := NewHandler(nil, Config{Frontend: frontend})
+	for _, requestPath := range []string{"/", "/games/game-123"} {
+		request := httptest.NewRequest(http.MethodGet, requestPath, nil)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "Letterpress app") {
+			t.Fatalf("GET %s = %d %q", requestPath, response.Code, response.Body.String())
+		}
+		if response.Header().Get("Cache-Control") != "no-cache" {
+			t.Fatalf("GET %s Cache-Control = %q", requestPath, response.Header().Get("Cache-Control"))
+		}
+	}
+	assetRequest := httptest.NewRequest(http.MethodGet, "/assets/app-123.js", nil)
+	assetResponse := httptest.NewRecorder()
+	handler.ServeHTTP(assetResponse, assetRequest)
+	if assetResponse.Code != http.StatusOK || !strings.Contains(assetResponse.Body.String(), "ready") {
+		t.Fatalf("asset = %d %q", assetResponse.Code, assetResponse.Body.String())
+	}
+	if assetResponse.Header().Get("Cache-Control") != "public, max-age=31536000, immutable" {
+		t.Fatalf("asset Cache-Control = %q", assetResponse.Header().Get("Cache-Control"))
+	}
+	apiRequest := httptest.NewRequest(http.MethodGet, "/api/v1/unknown", nil)
+	apiResponse := httptest.NewRecorder()
+	handler.ServeHTTP(apiResponse, apiRequest)
+	if apiResponse.Code != http.StatusNotFound {
+		t.Fatalf("unknown API status = %d, want 404", apiResponse.Code)
 	}
 }
 

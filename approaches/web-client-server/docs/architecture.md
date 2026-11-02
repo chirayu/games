@@ -109,10 +109,18 @@ private invitation link.
 ## Production shape
 
 The production artifact is a provider-neutral OCI container running one Go
-service with a mounted persistent directory for SQLite. MY-17 prepares the
-container, health checks, environment configuration, backup/restore guidance,
-and a GitHub Actions validation workflow. Deploying to a particular hosting
-provider is out of scope until one is selected.
+service with compiled Vue assets and a mounted persistent directory for SQLite.
+The Go router serves the SPA and `/api/v1` from one origin. Environment values
+configure the listener, canonical public URL, database, static assets, cookie
+security, and JSON log level. The process handles `SIGTERM` with a bounded
+graceful shutdown; `/healthz` reports liveness and `/readyz` checks SQLite.
+
+The container runs one non-root application process and expects one writable
+`/data` volume. Startup applies embedded migrations before listening. Request
+logs include method, path, status, response bytes, and duration but omit query
+strings, headers, cookies, and bodies so player capabilities are not exposed.
+The deployment runbook defines backup, restore, migration, and rollback
+procedures. Deploying to a particular hosting provider remains out of scope.
 
 ## Browser validation
 

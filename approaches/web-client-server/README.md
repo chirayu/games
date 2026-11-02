@@ -112,11 +112,14 @@ multi-day focus/visibility refresh and polling, recoverable local move drafts,
 final results and move history, HTTP service, Vue application, router, Vite
 development proxy, and focused backend and frontend tests are in place.
 The deterministic two-player Playwright journey is also in place. Production
-packaging is covered by the remaining wave.
+packaging, one-origin static serving, structured operations, and deployment
+documentation are also complete.
 
 ## Documentation
 
 - The repository `README.md` defines the game rules.
 - `docs/architecture.md` defines service boundaries and cross-cutting behavior.
 - `docs/decisions.md` records accepted decisions and their rationale.
+- `docs/deployment.md` defines the production runtime, build, backup, restore,
+  migration, and rollback procedures.
 - Linear tickets define the scope and acceptance criteria for each change.

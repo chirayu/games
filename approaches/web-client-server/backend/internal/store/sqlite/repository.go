@@ -130,6 +130,14 @@ func (repository *Repository) Close() error {
 	return repository.database.Close()
 }
 
+// Health verifies that SQLite can serve a request.
+func (repository *Repository) Health(ctx context.Context) error {
+	if err := repository.database.PingContext(ctx); err != nil {
+		return fmt.Errorf("ping sqlite database: %w", err)
+	}
+	return nil
+}
+
 // CreateGame atomically creates a game and both player seats.
 func (repository *Repository) CreateGame(ctx context.Context, game Game, players [2]Player) error {
 	transaction, err := repository.database.BeginTx(ctx, nil)

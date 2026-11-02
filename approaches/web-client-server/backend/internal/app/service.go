@@ -36,6 +36,7 @@ var (
 
 // Store is the persistence needed by the application service.
 type Store interface {
+	Health(context.Context) error
 	CreateGame(context.Context, sqlite.Game, [2]sqlite.Player) error
 	GetGame(context.Context, string) (sqlite.Game, error)
 	ListMoves(context.Context, string) ([]sqlite.Move, error)
@@ -120,6 +121,11 @@ func NewService(store Store) *Service {
 // Production callers should use NewService.
 func NewServiceWithBoardGenerator(store Store, generator game.BoardGenerator) *Service {
 	return &Service{store: store, random: rand.Reader, now: time.Now, generator: generator}
+}
+
+// Ready checks whether the authoritative store can serve requests.
+func (service *Service) Ready(ctx context.Context) error {
+	return service.store.Health(ctx)
 }
 
 // CreateGame creates a default game and two independent player capabilities.

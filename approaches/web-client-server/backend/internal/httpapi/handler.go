@@ -1,12 +1,15 @@
 package httpapi
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/url"
+	"path"
 	"strings"
 	"time"
 
@@ -20,6 +23,7 @@ const sessionLifetime = 180 * 24 * time.Hour
 type Config struct {
 	InsecureCookies bool
 	AllowedOrigin   string
+	Frontend        fs.FS
 	Now             func() time.Time
 }
 
@@ -31,10 +35,14 @@ func NewHandler(service *app.Service, config Config) http.Handler {
 	handler := &handler{service: service, config: config}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", health)
+	mux.HandleFunc("GET /readyz", handler.ready)
 	mux.HandleFunc("POST /api/v1/games", handler.createGame)
 	mux.HandleFunc("GET /api/v1/games/{gameID}", handler.getGame)
 	mux.HandleFunc("POST /api/v1/games/{gameID}/sessions", handler.exchangeSession)
 	mux.HandleFunc("POST /api/v1/games/{gameID}/moves", handler.submitMove)
+	if config.Frontend != nil {
+		mux.HandleFunc("GET /", handler.frontend)
+	}
 	return mux
 }
 
@@ -50,6 +58,40 @@ type errorBody struct {
 
 func health(response http.ResponseWriter, _ *http.Request) {
 	writeJSON(response, http.StatusOK, map[string]any{"data": map[string]string{"status": "ok"}})
+}
+
+func (handler *handler) ready(response http.ResponseWriter, request *http.Request) {
+	if handler.service == nil || handler.service.Ready(request.Context()) != nil {
+		writeError(response, http.StatusServiceUnavailable, "not_ready", "service is not ready")
+		return
+	}
+	writeJSON(response, http.StatusOK, map[string]any{"data": map[string]string{"status": "ready"}})
+}
+
+func (handler *handler) frontend(response http.ResponseWriter, request *http.Request) {
+	requested := strings.TrimPrefix(path.Clean(request.URL.Path), "/")
+	if requested == "." || requested == "" {
+		requested = "index.html"
+	}
+	if strings.HasPrefix(requested, "api/") || requested == "healthz" || requested == "readyz" {
+		http.NotFound(response, request)
+		return
+	}
+	content, err := fs.ReadFile(handler.config.Frontend, requested)
+	if err != nil && !strings.Contains(path.Base(requested), ".") {
+		requested = "index.html"
+		content, err = fs.ReadFile(handler.config.Frontend, requested)
+	}
+	if err != nil {
+		http.NotFound(response, request)
+		return
+	}
+	if requested == "index.html" {
+		response.Header().Set("Cache-Control", "no-cache")
+	} else {
+		response.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	}
+	http.ServeContent(response, request, requested, time.Time{}, bytes.NewReader(content))
 }
 
 func (handler *handler) createGame(response http.ResponseWriter, request *http.Request) {
