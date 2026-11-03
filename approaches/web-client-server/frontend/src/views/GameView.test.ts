@@ -173,6 +173,25 @@ describe("GameView", () => {
     expect(wrapper.get('[role="alert"]').text()).toContain(message);
   });
 
+  it("keeps the selected word editable after dictionary rejection", async () => {
+    api.getGame.mockResolvedValue(gameState());
+    api.submitMove.mockRejectedValue({ code: "invalid_word", status: 422 });
+    const { wrapper } = await mountGame();
+    await flushPromises();
+
+    await wrapper.get('[role="gridcell"]').trigger("click");
+    await wrapper.get(".move-submit").trigger("click");
+    await flushPromises();
+
+    expect(wrapper.get('[role="alert"]').text()).toContain(
+      "isn’t in the English dictionary",
+    );
+    expect(wrapper.get(".move-composer__word strong").text()).toBe("A");
+    expect(localStorage.getItem("letterpress:draft:game-123")).toContain(
+      '"tileIndexes":[0]',
+    );
+  });
+
   it("refreshes authoritative state after a version conflict", async () => {
     const refreshed = gameState();
     refreshed.activePlayer = 2;

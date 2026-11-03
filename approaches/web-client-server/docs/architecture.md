@@ -20,7 +20,15 @@ waiting for the opponent, it may poll every 30 seconds.
 The game package has no HTTP or database dependencies. It owns board creation,
 move validation, word derivation, ownership, protection, turns, scoring, and
 completion. Replaceable `WordValidator` and `BoardGenerator` interfaces isolate
-future dictionary and board-generation strategies.
+dictionary and board-generation strategies.
+
+The production `WordValidator` is an embedded, immutable ESDB/SCOWL size-80
+lexicon covering American, British, Canadian, and Australian spellings. The
+build embeds the checksum-verified, sorted A–Z artifact; startup validates it
+once and move transactions use concurrency-safe in-memory exact lookups. No
+runtime filesystem or network access is involved. The server still derives the
+candidate word from ordered board tiles before dictionary, repeated-word, and
+prefix validation.
 
 HTTP handlers translate requests and errors. An application service coordinates
 authentication, domain operations, and transactions. The SQLite store uses

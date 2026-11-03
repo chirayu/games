@@ -13,6 +13,9 @@ Mount that volume at `/data`; the default database is
 Terminate TLS at the platform load balancer or reverse proxy and forward the
 original `Host` and scheme.
 
+The ESDB/SCOWL attribution notice ships at `/app/licenses/ESDB.txt`; native
+builds place the same notice under `build/licenses/`.
+
 | Environment variable | Default in container | Purpose |
 | --- | --- | --- |
 | `LETTERPRESS_ADDR` | `:8080` | HTTP listen address |

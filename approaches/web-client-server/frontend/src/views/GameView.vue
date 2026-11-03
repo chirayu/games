@@ -246,7 +246,8 @@ async function submitSelection() {
     const messages: Record<string, string> = {
       duplicate_tile: "A tile can appear only once in a word.",
       invalid_tile: "One of those tiles is no longer available.",
-      invalid_word: "Select at least one tile before submitting.",
+      invalid_word:
+        "That word isn’t in the English dictionary. Edit your selection and try again.",
       repeated_word: "That word has already been played.",
       prefix_word: "That word is a prefix of a word already played.",
       out_of_turn: "It is no longer your turn.",

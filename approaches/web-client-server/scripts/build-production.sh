@@ -16,6 +16,8 @@ fi
 pnpm --dir "$frontend" build
 mkdir -p "$temporary/frontend"
 cp -R "$frontend/dist/." "$temporary/frontend/"
+mkdir -p "$temporary/licenses"
+cp "$backend/internal/game/dictionary/LICENSE-ESDB.txt" "$temporary/licenses/ESDB.txt"
 cd "$backend"
 go build -trimpath -ldflags="-s -w" -o "$temporary/letterpress" ./cmd/server
 rm -rf "$output"

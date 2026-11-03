@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"letterpress/backend/internal/app"
+	"letterpress/backend/internal/game"
 	"letterpress/backend/internal/store/sqlite"
 )
 
@@ -344,6 +345,86 @@ func TestSubmitMoveReturnsStructuredRuleAndVersionErrors(t *testing.T) {
 	}
 }
 
+func TestDictionaryValidationAcceptsEnglishAndRejectsGibberishAtomically(t *testing.T) {
+	handler, repository := newDictionaryIntegrationHandler(t, filepath.Join(t.TempDir(), "letterpress.db"))
+	created := createGame(t, handler)
+	playerOne := sessionCookie(t, handler, created.GameID, created.PlayerOneToken)
+	playerTwo := sessionCookie(t, handler, created.GameID, created.PlayerTwoToken)
+
+	accepted := decodeGameView(t, submitMove(t, handler, created.GameID, playerOne, []int{0, 1, 2}, 0), http.StatusOK)
+	if len(accepted.Moves) != 1 || accepted.Moves[0].Word != "CAT" || accepted.Version != 1 {
+		t.Fatalf("accepted dictionary move = %#v", accepted)
+	}
+	storedBefore, err := repository.GetGame(context.Background(), created.GameID)
+	if err != nil {
+		t.Fatalf("get state before rejection: %v", err)
+	}
+	movesBefore, err := repository.ListMoves(context.Background(), created.GameID)
+	if err != nil {
+		t.Fatalf("list moves before rejection: %v", err)
+	}
+
+	assertAPIError(t, submitMove(t, handler, created.GameID, playerTwo, []int{3, 4, 6, 7, 8}, 1), http.StatusUnprocessableEntity, "invalid_word")
+	storedAfter, err := repository.GetGame(context.Background(), created.GameID)
+	if err != nil {
+		t.Fatalf("get state after rejection: %v", err)
+	}
+	movesAfter, err := repository.ListMoves(context.Background(), created.GameID)
+	if err != nil {
+		t.Fatalf("list moves after rejection: %v", err)
+	}
+	if !reflect.DeepEqual(storedBefore, storedAfter) || !reflect.DeepEqual(movesBefore, movesAfter) {
+		t.Fatalf("invalid word changed state:\nbefore %#v / %#v\nafter %#v / %#v", storedBefore, movesBefore, storedAfter, movesAfter)
+	}
+
+	decodeGameView(t, submitMove(t, handler, created.GameID, playerTwo, []int{3, 4, 5}, 1), http.StatusOK)
+	assertAPIError(t, submitMove(t, handler, created.GameID, playerOne, []int{0, 1, 2}, 2), http.StatusUnprocessableEntity, "repeated_word")
+	assertAPIError(t, submitMove(t, handler, created.GameID, playerOne, []int{0, 1}, 2), http.StatusUnprocessableEntity, "prefix_word")
+}
+
+func TestDictionaryValidationRemainsDeterministicAcrossRestart(t *testing.T) {
+	databasePath := filepath.Join(t.TempDir(), "letterpress.db")
+	handler, repository := newDictionaryIntegrationHandler(t, databasePath)
+	created := createGame(t, handler)
+	playerOne := sessionCookie(t, handler, created.GameID, created.PlayerOneToken)
+	playerTwo := sessionCookie(t, handler, created.GameID, created.PlayerTwoToken)
+	decodeGameView(t, submitMove(t, handler, created.GameID, playerOne, []int{0, 1, 2}, 0), http.StatusOK)
+	if err := repository.Close(); err != nil {
+		t.Fatalf("close dictionary repository: %v", err)
+	}
+
+	restarted, _ := newDictionaryIntegrationHandler(t, databasePath)
+	assertAPIError(t, submitMove(t, restarted, created.GameID, playerTwo, []int{3, 4, 6, 7, 8}, 1), http.StatusUnprocessableEntity, "invalid_word")
+	view := decodeGameView(t, submitMove(t, restarted, created.GameID, playerTwo, []int{3, 4, 5}, 1), http.StatusOK)
+	if len(view.Moves) != 2 || view.Moves[1].Word != "DOG" {
+		t.Fatalf("post-restart move history = %#v", view.Moves)
+	}
+}
+
+func TestConcurrentDictionaryValidationCreatesOneTurn(t *testing.T) {
+	handler, repository := newDictionaryIntegrationHandler(t, filepath.Join(t.TempDir(), "letterpress.db"))
+	created := createGame(t, handler)
+	cookie := sessionCookie(t, handler, created.GameID, created.PlayerOneToken)
+	start := make(chan struct{})
+	responses := make(chan *httptest.ResponseRecorder, 2)
+	for _, indexes := range [][]int{{0, 1, 2}, {6, 7, 8}} {
+		indexes := indexes
+		go func() {
+			<-start
+			responses <- submitMove(t, handler, created.GameID, cookie, indexes, 0)
+		}()
+	}
+	close(start)
+	first, second := <-responses, <-responses
+	if !((first.Code == http.StatusOK && second.Code == http.StatusConflict) || (second.Code == http.StatusOK && first.Code == http.StatusConflict)) {
+		t.Fatalf("concurrent dictionary statuses = %d/%d, want 200/409", first.Code, second.Code)
+	}
+	moves, err := repository.ListMoves(context.Background(), created.GameID)
+	if err != nil || len(moves) != 1 {
+		t.Fatalf("concurrent dictionary moves = %#v, err %v", moves, err)
+	}
+}
+
 func TestConcurrentDoubleSubmissionCreatesOneTurn(t *testing.T) {
 	handler, repository, _ := newIntegrationHandler(t, true)
 	created := createGame(t, handler)
@@ -421,7 +502,7 @@ func TestGameAndSessionResumeAfterRepositoryRestart(t *testing.T) {
 		t.Fatalf("open repository: %v", err)
 	}
 	now := time.Date(2026, time.November, 2, 8, 0, 0, 0, time.UTC)
-	handler := NewHandler(app.NewService(repository), Config{InsecureCookies: true, Now: func() time.Time { return now }})
+	handler := NewHandler(testService(repository), Config{InsecureCookies: true, Now: func() time.Time { return now }})
 	created := createGame(t, handler)
 	cookie := sessionCookie(t, handler, created.GameID, created.PlayerOneToken)
 	before := loadGame(t, handler, created.GameID, cookie)
@@ -434,7 +515,7 @@ func TestGameAndSessionResumeAfterRepositoryRestart(t *testing.T) {
 		t.Fatalf("reopen repository: %v", err)
 	}
 	t.Cleanup(func() { _ = reopened.Close() })
-	restartedHandler := NewHandler(app.NewService(reopened), Config{InsecureCookies: true, Now: func() time.Time { return now.Add(time.Hour) }})
+	restartedHandler := NewHandler(testService(reopened), Config{InsecureCookies: true, Now: func() time.Time { return now.Add(time.Hour) }})
 	after := loadGame(t, restartedHandler, created.GameID, cookie)
 	if !reflect.DeepEqual(before, after) {
 		t.Fatalf("state changed across restart:\nbefore: %#v\nafter: %#v", before, after)
@@ -489,7 +570,27 @@ func newIntegrationHandler(t *testing.T, secureCookies bool) (http.Handler, *sql
 	}
 	t.Cleanup(func() { _ = repository.Close() })
 	now := time.Date(2026, time.October, 31, 9, 0, 0, 0, time.UTC)
-	return NewHandler(app.NewService(repository), Config{InsecureCookies: !secureCookies, Now: func() time.Time { return now }}), repository, now
+	return NewHandler(testService(repository), Config{InsecureCookies: !secureCookies, Now: func() time.Time { return now }}), repository, now
+}
+
+func testService(repository *sqlite.Repository) *app.Service {
+	return app.NewServiceWithDependencies(repository, game.NewCryptoBoardGenerator(), game.MVPWordValidator{})
+}
+
+func newDictionaryIntegrationHandler(t *testing.T, databasePath string) (http.Handler, *sqlite.Repository) {
+	t.Helper()
+	repository, err := sqlite.Open(context.Background(), databasePath)
+	if err != nil {
+		t.Fatalf("open dictionary repository: %v", err)
+	}
+	t.Cleanup(func() { _ = repository.Close() })
+	generator, err := game.NewFixedBoardGenerator("CATDOGSUNMAPEXTRAORDINARY")
+	if err != nil {
+		t.Fatalf("create dictionary test board: %v", err)
+	}
+	service := app.NewServiceWithDependencies(repository, generator, game.EnglishDictionaryValidator())
+	now := time.Date(2026, time.November, 3, 12, 0, 0, 0, time.UTC)
+	return NewHandler(service, Config{InsecureCookies: true, Now: func() time.Time { return now }}), repository
 }
 
 func createGame(t *testing.T, handler http.Handler) createdGameResponse {

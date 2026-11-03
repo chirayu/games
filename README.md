@@ -27,8 +27,11 @@ The first implementation uses a 5×5 grid.
 
 ## Valid words
 
-- During the MVP, every non-empty sequence of selected letters is considered a
-  valid word. Dictionary validation will be added later.
+- A selected sequence must be present in the Letterpress English dictionary,
+  generated from ESDB/SCOWL size 80 with American, British, Canadian, and
+  Australian spellings.
+- Dictionary entries are normalized to uppercase A–Z. Words containing spaces,
+  punctuation, digits, or non-ASCII letters cannot be formed from the board.
 - A word cannot be played more than once.
 - A word cannot be played if it is a prefix of a previously played word. For
   example, after `dogs` has been played, `dog` is not allowed.

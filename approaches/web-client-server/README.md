@@ -16,6 +16,24 @@ No standalone SQLite installation is required. The backend uses the pure-Go
 SQLite driver, applies embedded Goose migrations, and keeps sqlc output in the
 repository.
 
+## English dictionary
+
+The server embeds a generated 222,023-word English dictionary from the official
+English Speller Database (ESDB/SCOWL) release `rel-2026.02.25`. It uses size 80,
+variant level 1, and American, British, Canadian, and Australian spellings. The
+generator deaccents, uppercases, filters to A–Z, sorts, and deduplicates the
+source. Production validation performs immutable in-memory lookups and never
+calls a dictionary service or reads the artifact per move.
+
+Source revision, checksums, generation instructions, and the complete upstream
+notice live in `backend/internal/game/dictionary/`. To intentionally reproduce
+the pinned artifact:
+
+```sh
+cd approaches/web-client-server/backend
+./internal/game/dictionary/generate.sh
+```
+
 ## Layout
 
 ```text
@@ -109,8 +127,9 @@ use cryptographically secure random letters.
 The pure Go game engine, SQLite persistence layer, secure game creation and
 invitation flow, authenticated responsive board, transactional move submission,
 multi-day focus/visibility refresh and polling, recoverable local move drafts,
-final results and move history, HTTP service, Vue application, router, Vite
-development proxy, and focused backend and frontend tests are in place.
+server-authoritative English dictionary validation, final results and move
+history, HTTP service, Vue application, router, Vite development proxy, and
+focused backend and frontend tests are in place.
 The deterministic two-player Playwright journey is also in place. Production
 packaging, one-origin static serving, structured operations, and deployment
 documentation are also complete.

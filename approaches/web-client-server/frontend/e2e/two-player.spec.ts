@@ -47,10 +47,10 @@ test("two isolated players resume, recover from stale state, and finish a game",
     playerTwo.getByText("Player 2", { exact: true }).first(),
   ).toBeVisible();
 
-  await playTiles(playerOne, [0], 1);
+  await playTiles(playerOne, [0, 1, 2], 1);
   await playerTwo.reload();
   await expectVersion(playerTwo, 1);
-  await playTiles(playerTwo, [1], 2);
+  await playTiles(playerTwo, [3, 4, 5], 2);
 
   const staleContext = await browser.newContext({
     storageState: await playerOneContext.storageState(),
@@ -68,12 +68,12 @@ test("two isolated players resume, recover from stale state, and finish a game",
 
   await playerOne.reload();
   await expectVersion(playerOne, 2);
-  await playTiles(playerOne, [2], 3);
+  await playTiles(playerOne, [6, 7, 8], 3);
   await playerTwo.reload();
   await expectVersion(playerTwo, 3);
-  await playTiles(playerTwo, [3], 4);
+  await playTiles(playerTwo, [9, 10, 11], 4);
 
-  await stalePlayerOne.getByRole("gridcell").nth(4).click();
+  await stalePlayerOne.getByRole("gridcell").nth(12).click();
   await stalePlayerOne.getByRole("button", { name: "Submit word" }).click();
   await expect(stalePlayerOne.getByRole("alert")).toContainText(
     "has been refreshed",
@@ -92,14 +92,14 @@ test("two isolated players resume, recover from stale state, and finish a game",
   await expectVersion(playerOne, 4);
   await playTiles(
     playerOne,
-    Array.from({ length: 21 }, (_, index) => index + 4),
+    Array.from({ length: 13 }, (_, index) => index + 12),
     5,
   );
   await expect(
     playerOne.getByRole("heading", { name: "You won" }),
   ).toBeVisible();
   await expect(playerOne.locator(".result-card")).toContainText(
-    "Player 1 23 · Player 2 2",
+    "Player 1 19 · Player 2 6",
   );
 
   await resumedPlayerTwo.reload();
@@ -108,7 +108,7 @@ test("two isolated players resume, recover from stale state, and finish a game",
     resumedPlayerTwo.getByRole("heading", { name: "Player 1 won" }),
   ).toBeVisible();
   await expect(resumedPlayerTwo.locator(".result-card")).toContainText(
-    "Player 1 23 · Player 2 2",
+    "Player 1 19 · Player 2 6",
   );
   await expect(playerOne.locator(".move-history")).toContainText(
     "Move history (5)",

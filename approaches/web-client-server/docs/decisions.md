@@ -16,9 +16,11 @@ ticket intentionally changes one.
 4. **Frontend stack.** Use Vue 3, TypeScript, Vite, Vue Router, and pnpm. Prefer
    composables and scoped CSS; introduce a global store or component library
    only when a ticket demonstrates a need.
-5. **MVP word validation.** Accept every non-empty selected sequence while
-   retaining duplicate-word and prefix restrictions. A later dictionary
-   implementation plugs into `WordValidator`.
+5. **English word validation.** Validate server-derived words against the
+   embedded ESDB/SCOWL `rel-2026.02.25` size-80 lexicon with American, British,
+   Canadian, and Australian spellings at variant level 1. Normalize the
+   generated artifact to uppercase A–Z, preserve duplicate-word and prefix
+   restrictions, and make dictionary updates explicit and reproducible.
 6. **MVP board generation.** Generate each position independently and uniformly
    from A–Z. Letters behave literally. Alternative generators plug into
    `BoardGenerator`.

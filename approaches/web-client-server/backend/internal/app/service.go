@@ -110,17 +110,24 @@ type Service struct {
 	random    io.Reader
 	now       func() time.Time
 	generator game.BoardGenerator
+	validator game.WordValidator
 }
 
 // NewService returns the application service with production-safe randomness.
 func NewService(store Store) *Service {
-	return NewServiceWithBoardGenerator(store, game.NewCryptoBoardGenerator())
+	return NewServiceWithDependencies(store, game.NewCryptoBoardGenerator(), game.EnglishDictionaryValidator())
 }
 
 // NewServiceWithBoardGenerator supplies a deterministic generator for tests.
 // Production callers should use NewService.
 func NewServiceWithBoardGenerator(store Store, generator game.BoardGenerator) *Service {
-	return &Service{store: store, random: rand.Reader, now: time.Now, generator: generator}
+	return NewServiceWithDependencies(store, generator, game.EnglishDictionaryValidator())
+}
+
+// NewServiceWithDependencies allows focused tests to supply deterministic
+// generation and validation strategies.
+func NewServiceWithDependencies(store Store, generator game.BoardGenerator, validator game.WordValidator) *Service {
+	return &Service{store: store, random: rand.Reader, now: time.Now, generator: generator, validator: validator}
 }
 
 // Ready checks whether the authoritative store can serve requests.
@@ -130,7 +137,7 @@ func (service *Service) Ready(ctx context.Context) error {
 
 // CreateGame creates a default game and two independent player capabilities.
 func (service *Service) CreateGame(ctx context.Context) (CreatedGame, error) {
-	domainGame, err := game.New(game.DefaultWidth, game.DefaultHeight, service.generator, game.MVPWordValidator{})
+	domainGame, err := game.New(game.DefaultWidth, game.DefaultHeight, service.generator, service.validator)
 	if err != nil {
 		return CreatedGame{}, fmt.Errorf("generate game board: %w", err)
 	}
@@ -240,7 +247,7 @@ func (service *Service) GetGame(ctx context.Context, gameID, token string) (Game
 		Width: game.DefaultWidth, Height: game.DefaultHeight,
 		Letters: stored.BoardLetters, Owners: owners,
 		CurrentPlayer: game.Player(stored.CurrentPlayer), Status: game.Status(stored.Status), Moves: domainMoves,
-	}, game.MVPWordValidator{})
+	}, service.validator)
 	if err != nil {
 		return GameView{}, fmt.Errorf("restore stored game: %w", err)
 	}
@@ -301,7 +308,7 @@ func (service *Service) SubmitMove(
 			Width: game.DefaultWidth, Height: game.DefaultHeight,
 			Letters: stored.BoardLetters, Owners: owners,
 			CurrentPlayer: game.Player(stored.CurrentPlayer), Status: game.Status(stored.Status), Moves: moves,
-		}, game.MVPWordValidator{})
+		}, service.validator)
 		if err != nil {
 			return sqlite.Move{}, sqlite.GameState{}, fmt.Errorf("restore game for move: %w", err)
 		}
@@ -319,12 +326,12 @@ func (service *Service) SubmitMove(
 		}
 		playedAt := service.now().UTC()
 		return sqlite.Move{
-			GameID: gameID, Player: int64(accepted.Player), TurnNumber: int64(accepted.TurnNumber),
-			TileIndexes: persistedIndexes, Word: accepted.Word, CreatedAt: playedAt,
-		}, sqlite.GameState{
-			TileOwners: ownersAfter, CurrentPlayer: int64(restored.CurrentPlayer()),
-			Status: string(restored.Status()), UpdatedAt: playedAt,
-		}, nil
+				GameID: gameID, Player: int64(accepted.Player), TurnNumber: int64(accepted.TurnNumber),
+				TileIndexes: persistedIndexes, Word: accepted.Word, CreatedAt: playedAt,
+			}, sqlite.GameState{
+				TileOwners: ownersAfter, CurrentPlayer: int64(restored.CurrentPlayer()),
+				Status: string(restored.Status()), UpdatedAt: playedAt,
+			}, nil
 	})
 	switch {
 	case errors.Is(err, sqlite.ErrGameNotFound):

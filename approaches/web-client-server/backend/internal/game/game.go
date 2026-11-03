@@ -15,10 +15,10 @@ type Game struct {
 	result        *Result
 }
 
-// NewDefault creates a 5x5 game using secure random letters and MVP word
-// validation.
+// NewDefault creates a 5x5 game using secure random letters and the embedded
+// English dictionary.
 func NewDefault() (*Game, error) {
-	return New(DefaultWidth, DefaultHeight, NewCryptoBoardGenerator(), MVPWordValidator{})
+	return New(DefaultWidth, DefaultHeight, NewCryptoBoardGenerator(), EnglishDictionaryValidator())
 }
 
 // New creates an active game with a configurable board and replaceable board
