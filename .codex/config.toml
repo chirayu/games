@@ -1,7 +1,7 @@
 # Allow Codex to work anywhere in this repository without approval prompts.
 # This project config is loaded only when the repository is trusted.
 approval_policy = "on-request"
-default_permissions = "letterpress-local"
+default_permissions = "games-local"
 
 [features]
 network_proxy = true
@@ -18,25 +18,25 @@ GOTOOLCHAIN = "local"
 GOTELEMETRY = "off"
 GOTELEMETRYDIR = "/private/tmp/letterpress-go/telemetry"
 
-[permissions.letterpress-local]
-description = "Unrestricted file operations inside the Letterpress repository."
+[permissions.games-local]
+description = "Unrestricted file operations inside the games repository."
 
-[permissions.letterpress-local.filesystem]
+[permissions.games-local.filesystem]
 ":minimal" = "read"
 ":tmpdir" = "write"
 ":slash_tmp" = "write"
-"/Users/chirayu/code/games/letterpress" = "write"
+"/Users/chirayu/code/games" = "write"
 "/Users/chirayu/.cache/codex-runtimes/codex-primary-runtime/dependencies" = "read"
 "/Users/chirayu/.local/share/go/go1.27.3" = "read"
 "/Users/chirayu/.gitconfig" = "read"
 "/Users/chirayu/Library/Application Support/go/telemetry" = "read"
 "/System/Library/OpenSSL" = "read"
 
-[permissions.letterpress-local.network]
+[permissions.games-local.network]
 enabled = true
 allow_local_binding = true
 
-[permissions.letterpress-local.network.domains]
+[permissions.games-local.network.domains]
 "localhost" = "allow"
 "127.0.0.1" = "allow"
 "registry.npmjs.org" = "allow"

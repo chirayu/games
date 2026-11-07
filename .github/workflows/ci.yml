@@ -12,13 +12,13 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: approaches/web-client-server/backend
+        working-directory: letterpress/approaches/web-client-server/backend
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version-file: approaches/web-client-server/backend/go.mod
-          cache-dependency-path: approaches/web-client-server/backend/go.sum
+          go-version-file: letterpress/approaches/web-client-server/backend/go.mod
+          cache-dependency-path: letterpress/approaches/web-client-server/backend/go.sum
       - run: test -z "$(gofmt -l .)"
       - run: go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.30.0 generate
       - run: git diff --exit-code -- internal/store/sqlite/db
@@ -32,7 +32,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: approaches/web-client-server/frontend
+        working-directory: letterpress/approaches/web-client-server/frontend
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -49,13 +49,13 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: approaches/web-client-server/frontend
+        working-directory: letterpress/approaches/web-client-server/frontend
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version-file: approaches/web-client-server/backend/go.mod
-          cache-dependency-path: approaches/web-client-server/backend/go.sum
+          go-version-file: letterpress/approaches/web-client-server/backend/go.mod
+          cache-dependency-path: letterpress/approaches/web-client-server/backend/go.sum
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -68,11 +68,11 @@ jobs:
         if: failure()
         with:
           name: playwright-results
-          path: approaches/web-client-server/frontend/test-results
+          path: letterpress/approaches/web-client-server/frontend/test-results
           if-no-files-found: ignore
 
   container:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: docker build -f approaches/web-client-server/Containerfile -t letterpress:ci approaches/web-client-server
+      - run: docker build -f letterpress/approaches/web-client-server/Containerfile -t letterpress:ci letterpress/approaches/web-client-server
