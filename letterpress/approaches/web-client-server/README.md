@@ -152,7 +152,9 @@ documentation are also complete.
 The durable allocation resource, atomic game-creation boundary, and complete
 specified-player challenge journey are also in place. Players can challenge a
 search result, accept or decline incoming challenges, cancel outgoing ones, and
-enter the allocated game. Random matchmaking builds on this next.
+enter the allocated game. Persisted random-human matchmaking is also available:
+players may join or cancel the queue, and compatible oldest-first requests are
+atomically assigned one shared game.
 
 ## Documentation
 

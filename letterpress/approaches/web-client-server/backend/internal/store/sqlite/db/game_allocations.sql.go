@@ -11,6 +11,33 @@ import (
 	"time"
 )
 
+const allocateRandomGameAllocation = `-- name: AllocateRandomGameAllocation :execrows
+UPDATE game_allocations
+SET state = 'allocated', opponent_id = ?1,
+    game_id = ?2, updated_at = ?3
+WHERE id = ?4 AND mode = 'random' AND state = 'queued'
+`
+
+type AllocateRandomGameAllocationParams struct {
+	OpponentID sql.NullString `json:"opponent_id"`
+	GameID     sql.NullString `json:"game_id"`
+	UpdatedAt  time.Time      `json:"updated_at"`
+	ID         string         `json:"id"`
+}
+
+func (q *Queries) AllocateRandomGameAllocation(ctx context.Context, arg AllocateRandomGameAllocationParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, allocateRandomGameAllocation,
+		arg.OpponentID,
+		arg.GameID,
+		arg.UpdatedAt,
+		arg.ID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const cancelGameAllocation = `-- name: CancelGameAllocation :execrows
 UPDATE game_allocations
 SET state = 'cancelled', updated_at = ?
@@ -59,23 +86,24 @@ func (q *Queries) CompleteGameAllocation(ctx context.Context, arg CompleteGameAl
 
 const createGameAllocation = `-- name: CreateGameAllocation :execrows
 INSERT OR IGNORE INTO game_allocations (
-    id, requester_id, opponent_id, mode, state, idempotency_key,
+    id, requester_id, opponent_id, mode, allowed_opponent_type, state, idempotency_key,
     game_id, failure_reason, expires_at, created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type CreateGameAllocationParams struct {
-	ID             string         `json:"id"`
-	RequesterID    string         `json:"requester_id"`
-	OpponentID     sql.NullString `json:"opponent_id"`
-	Mode           string         `json:"mode"`
-	State          string         `json:"state"`
-	IdempotencyKey string         `json:"idempotency_key"`
-	GameID         sql.NullString `json:"game_id"`
-	FailureReason  sql.NullString `json:"failure_reason"`
-	ExpiresAt      sql.NullTime   `json:"expires_at"`
-	CreatedAt      time.Time      `json:"created_at"`
-	UpdatedAt      time.Time      `json:"updated_at"`
+	ID                  string         `json:"id"`
+	RequesterID         string         `json:"requester_id"`
+	OpponentID          sql.NullString `json:"opponent_id"`
+	Mode                string         `json:"mode"`
+	AllowedOpponentType string         `json:"allowed_opponent_type"`
+	State               string         `json:"state"`
+	IdempotencyKey      string         `json:"idempotency_key"`
+	GameID              sql.NullString `json:"game_id"`
+	FailureReason       sql.NullString `json:"failure_reason"`
+	ExpiresAt           sql.NullTime   `json:"expires_at"`
+	CreatedAt           time.Time      `json:"created_at"`
+	UpdatedAt           time.Time      `json:"updated_at"`
 }
 
 func (q *Queries) CreateGameAllocation(ctx context.Context, arg CreateGameAllocationParams) (int64, error) {
@@ -84,6 +112,7 @@ func (q *Queries) CreateGameAllocation(ctx context.Context, arg CreateGameAlloca
 		arg.RequesterID,
 		arg.OpponentID,
 		arg.Mode,
+		arg.AllowedOpponentType,
 		arg.State,
 		arg.IdempotencyKey,
 		arg.GameID,
@@ -160,8 +189,40 @@ func (q *Queries) ExpireGameAllocation(ctx context.Context, arg ExpireGameAlloca
 	return result.RowsAffected()
 }
 
+const getEquivalentQueuedRandomAllocation = `-- name: GetEquivalentQueuedRandomAllocation :one
+SELECT id, requester_id, opponent_id, mode, allowed_opponent_type, state, idempotency_key, game_id, failure_reason, expires_at, created_at, updated_at FROM game_allocations
+WHERE requester_id = ? AND mode = 'random' AND allowed_opponent_type = ? AND state = 'queued'
+ORDER BY created_at ASC, id ASC
+LIMIT 1
+`
+
+type GetEquivalentQueuedRandomAllocationParams struct {
+	RequesterID         string `json:"requester_id"`
+	AllowedOpponentType string `json:"allowed_opponent_type"`
+}
+
+func (q *Queries) GetEquivalentQueuedRandomAllocation(ctx context.Context, arg GetEquivalentQueuedRandomAllocationParams) (GameAllocation, error) {
+	row := q.db.QueryRowContext(ctx, getEquivalentQueuedRandomAllocation, arg.RequesterID, arg.AllowedOpponentType)
+	var i GameAllocation
+	err := row.Scan(
+		&i.ID,
+		&i.RequesterID,
+		&i.OpponentID,
+		&i.Mode,
+		&i.AllowedOpponentType,
+		&i.State,
+		&i.IdempotencyKey,
+		&i.GameID,
+		&i.FailureReason,
+		&i.ExpiresAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getGameAllocation = `-- name: GetGameAllocation :one
-SELECT id, requester_id, opponent_id, mode, state, idempotency_key, game_id, failure_reason, expires_at, created_at, updated_at FROM game_allocations WHERE id = ?
+SELECT id, requester_id, opponent_id, mode, allowed_opponent_type, state, idempotency_key, game_id, failure_reason, expires_at, created_at, updated_at FROM game_allocations WHERE id = ?
 `
 
 func (q *Queries) GetGameAllocation(ctx context.Context, id string) (GameAllocation, error) {
@@ -172,6 +233,7 @@ func (q *Queries) GetGameAllocation(ctx context.Context, id string) (GameAllocat
 		&i.RequesterID,
 		&i.OpponentID,
 		&i.Mode,
+		&i.AllowedOpponentType,
 		&i.State,
 		&i.IdempotencyKey,
 		&i.GameID,
@@ -184,7 +246,7 @@ func (q *Queries) GetGameAllocation(ctx context.Context, id string) (GameAllocat
 }
 
 const getGameAllocationByRequesterKey = `-- name: GetGameAllocationByRequesterKey :one
-SELECT id, requester_id, opponent_id, mode, state, idempotency_key, game_id, failure_reason, expires_at, created_at, updated_at FROM game_allocations WHERE requester_id = ? AND idempotency_key = ?
+SELECT id, requester_id, opponent_id, mode, allowed_opponent_type, state, idempotency_key, game_id, failure_reason, expires_at, created_at, updated_at FROM game_allocations WHERE requester_id = ? AND idempotency_key = ?
 `
 
 type GetGameAllocationByRequesterKeyParams struct {
@@ -200,6 +262,44 @@ func (q *Queries) GetGameAllocationByRequesterKey(ctx context.Context, arg GetGa
 		&i.RequesterID,
 		&i.OpponentID,
 		&i.Mode,
+		&i.AllowedOpponentType,
+		&i.State,
+		&i.IdempotencyKey,
+		&i.GameID,
+		&i.FailureReason,
+		&i.ExpiresAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getRandomMatchCandidate = `-- name: GetRandomMatchCandidate :one
+SELECT id, requester_id, opponent_id, mode, allowed_opponent_type, state, idempotency_key, game_id, failure_reason, expires_at, created_at, updated_at FROM game_allocations
+WHERE mode = 'random'
+  AND allowed_opponent_type = ?1
+  AND state = 'queued'
+  AND requester_id != ?2
+  AND id != ?3
+ORDER BY created_at ASC, id ASC
+LIMIT 1
+`
+
+type GetRandomMatchCandidateParams struct {
+	AllowedOpponentType string `json:"allowed_opponent_type"`
+	RequesterID         string `json:"requester_id"`
+	ID                  string `json:"id"`
+}
+
+func (q *Queries) GetRandomMatchCandidate(ctx context.Context, arg GetRandomMatchCandidateParams) (GameAllocation, error) {
+	row := q.db.QueryRowContext(ctx, getRandomMatchCandidate, arg.AllowedOpponentType, arg.RequesterID, arg.ID)
+	var i GameAllocation
+	err := row.Scan(
+		&i.ID,
+		&i.RequesterID,
+		&i.OpponentID,
+		&i.Mode,
+		&i.AllowedOpponentType,
 		&i.State,
 		&i.IdempotencyKey,
 		&i.GameID,

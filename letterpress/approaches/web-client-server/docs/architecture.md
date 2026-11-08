@@ -164,6 +164,18 @@ and outgoing specified challenges. Only the intended opponent may `POST` to
 `/{id}/accept` or `/{id}/decline`; accepting creates exactly one game, while the
 requester may cancel with `DELETE /{id}` until another terminal transition wins.
 
+Random allocations explicitly carry their allowed opponent type; the current
+client requests exactly `human`. A partial unique index permits only one queued
+random-human allocation per player, so retries with new idempotency keys recover
+the existing queue entry. Creating or retrying an entry also runs matchmaking.
+An immediate SQLite transaction selects the oldest compatible queued allocation
+by creation time and ID, excluding the requester, then creates one game, assigns
+the older request to seat 1 and the matching request to seat 2, and marks both
+allocations allocated with the shared game ID. A lone request remains persisted
+and cancellable. This durable queue survives restart and cannot silently replace
+a requested human with a bot. The lobby polls its allocation status while
+visible and navigates through the normal game route after a match.
+
 Completion runs in an immediate SQLite transaction. It locks and rechecks the
 allocation, creates the game and both seats, and attaches the game ID before
 commit. The requester deterministically receives seat 1 and the resolved

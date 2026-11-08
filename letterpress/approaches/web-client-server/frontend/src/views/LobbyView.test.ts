@@ -171,6 +171,78 @@ describe("LobbyView", () => {
     expect(push).toHaveBeenCalledWith("/games/game-1");
   });
 
+  it("starts random human matchmaking and opens an immediate match", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        response(200, { data: { id: "p1", name: "Alice" } }),
+      )
+      .mockResolvedValueOnce(response(200, { data: { items: [] } }))
+      .mockResolvedValueOnce(response(200, { data: { items: [] } }))
+      .mockResolvedValueOnce(
+        response(201, {
+          data: {
+            id: "random-1",
+            mode: "random",
+            allowedOpponentTypes: ["human"],
+            state: "allocated",
+            gameId: "random-game",
+          },
+        }),
+      );
+    await establishAlice(fetchMock);
+    const wrapper = mountLobby();
+    await flushPromises();
+
+    await wrapper.get(".random-matchmaking .primary-action").trigger("click");
+    await flushPromises();
+
+    const [path, request] = fetchMock.mock.calls.at(-1)!;
+    expect(path).toBe("/api/v1/game-allocations");
+    expect(request).toEqual(expect.objectContaining({ method: "POST" }));
+    expect(JSON.parse(request.body)).toEqual({
+      mode: "random",
+      allowedOpponentTypes: ["human"],
+    });
+    expect(push).toHaveBeenCalledWith("/games/random-game");
+  });
+
+  it("shows and cancels a pending random queue entry", async () => {
+    const queued = {
+      id: "random-queued",
+      mode: "random",
+      allowedOpponentTypes: ["human"],
+      state: "queued",
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        response(200, { data: { id: "p1", name: "Alice" } }),
+      )
+      .mockResolvedValueOnce(response(200, { data: { items: [] } }))
+      .mockResolvedValueOnce(response(200, { data: { items: [] } }))
+      .mockResolvedValueOnce(response(201, { data: queued }))
+      .mockResolvedValueOnce(
+        response(200, { data: { ...queued, state: "cancelled" } }),
+      );
+    await establishAlice(fetchMock);
+    const wrapper = mountLobby();
+    await flushPromises();
+
+    await wrapper.get(".random-matchmaking .primary-action").trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).toContain("Looking for another human player");
+    await wrapper.get(".random-matchmaking .secondary-action").trigger("click");
+    await flushPromises();
+
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "/api/v1/game-allocations/random-queued",
+      expect.objectContaining({ method: "DELETE" }),
+    );
+    expect(wrapper.text()).toContain("Find a human opponent");
+    wrapper.unmount();
+  });
+
   it("logs out the current browser session and returns to name entry", async () => {
     const fetchMock = vi
       .fn()

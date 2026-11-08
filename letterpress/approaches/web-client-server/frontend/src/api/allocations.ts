@@ -40,6 +40,27 @@ export function createSpecifiedChallenge(
   });
 }
 
+export function createRandomHumanAllocation(): Promise<GameAllocation> {
+  return request<GameAllocation>("/api/v1/game-allocations", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Idempotency-Key": crypto.randomUUID(),
+    },
+    body: JSON.stringify({
+      mode: "random",
+      allowedOpponentTypes: ["human"],
+    }),
+  });
+}
+
+export function getAllocation(id: string): Promise<GameAllocation> {
+  return request<GameAllocation>(
+    `/api/v1/game-allocations/${encodeURIComponent(id)}`,
+    { method: "GET" },
+  );
+}
+
 export async function getPendingChallenges(): Promise<ChallengeSummary[]> {
   const page = await request<{ items: ChallengeSummary[] }>(
     "/api/v1/game-allocations",

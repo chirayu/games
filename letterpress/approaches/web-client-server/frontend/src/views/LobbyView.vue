@@ -6,10 +6,13 @@ import { getActiveGames, type ActiveGameSummary } from "../api/games";
 import {
   acceptChallenge,
   cancelChallenge,
+  createRandomHumanAllocation,
   createSpecifiedChallenge,
   declineChallenge,
+  getAllocation,
   getPendingChallenges,
   type ChallengeSummary,
+  type GameAllocation,
 } from "../api/allocations";
 import { searchPlayers, type PublicPlayer } from "../api/players";
 import { APIError } from "../api/request";
@@ -33,6 +36,10 @@ const searchState = ref<"idle" | "loading" | "ready" | "error">("idle");
 const challenges = ref<ChallengeSummary[]>([]);
 const challengeError = ref("");
 const challengeBusy = ref("");
+const randomAllocation = ref<GameAllocation>();
+const randomBusy = ref(false);
+const randomError = ref("");
+let randomPoll: number | undefined;
 
 const incomingChallenges = computed(() =>
   challenges.value.filter((challenge) => challenge.direction === "incoming"),
@@ -56,14 +63,74 @@ onMounted(() => {
 onUnmounted(() => {
   window.removeEventListener("focus", refreshLobby);
   document.removeEventListener("visibilitychange", refreshWhenVisible);
+  window.clearInterval(randomPoll);
 });
+
+async function joinRandomQueue() {
+  randomBusy.value = true;
+  randomError.value = "";
+  try {
+    randomAllocation.value = await createRandomHumanAllocation();
+    await handleRandomAllocation(randomAllocation.value);
+    if (
+      randomAllocation.value?.state === "queued" &&
+      randomPoll === undefined
+    ) {
+      randomPoll = window.setInterval(pollRandomAllocation, 5000);
+    }
+  } catch {
+    randomError.value = "Random matchmaking could not start. Try again.";
+  } finally {
+    randomBusy.value = false;
+  }
+}
+
+async function pollRandomAllocation() {
+  if (!randomAllocation.value || document.visibilityState !== "visible") return;
+  try {
+    randomAllocation.value = await getAllocation(randomAllocation.value.id);
+    await handleRandomAllocation(randomAllocation.value);
+  } catch {
+    randomError.value =
+      "Queue status could not be refreshed. We’ll keep trying.";
+  }
+}
+
+async function handleRandomAllocation(allocation: GameAllocation) {
+  if (allocation.state === "allocated" && allocation.gameId) {
+    window.clearInterval(randomPoll);
+    randomPoll = undefined;
+    await router.push(`/games/${allocation.gameId}`);
+  }
+}
+
+async function leaveRandomQueue() {
+  if (!randomAllocation.value) return;
+  randomBusy.value = true;
+  randomError.value = "";
+  try {
+    await cancelChallenge(randomAllocation.value.id);
+    randomAllocation.value = undefined;
+    window.clearInterval(randomPoll);
+    randomPoll = undefined;
+  } catch {
+    randomError.value = "The queue changed before cancellation completed.";
+    await pollRandomAllocation();
+  } finally {
+    randomBusy.value = false;
+  }
+}
 
 function refreshWhenVisible() {
   if (document.visibilityState === "visible") void refreshLobby();
 }
 
 async function refreshLobby() {
-  await Promise.all([loadGames(false), loadChallenges()]);
+  await Promise.all([
+    loadGames(false),
+    loadChallenges(),
+    randomAllocation.value ? pollRandomAllocation() : Promise.resolve(),
+  ]);
 }
 
 async function loadChallenges() {
@@ -216,6 +283,34 @@ async function logout() {
       </button>
     </section>
     <div v-else class="lobby-content">
+      <section class="random-matchmaking" aria-labelledby="random-title">
+        <h2 id="random-title" class="section-title">Play a random player</h2>
+        <p v-if="randomAllocation?.state === 'queued'" role="status">
+          Looking for another human player…
+        </p>
+        <button
+          v-if="randomAllocation?.state === 'queued'"
+          class="secondary-action"
+          type="button"
+          :disabled="randomBusy"
+          @click="leaveRandomQueue"
+        >
+          {{ randomBusy ? "Cancelling…" : "Cancel search" }}
+        </button>
+        <button
+          v-else
+          class="primary-action"
+          type="button"
+          :disabled="randomBusy"
+          @click="joinRandomQueue"
+        >
+          {{ randomBusy ? "Finding a player…" : "Find a human opponent" }}
+        </button>
+        <p v-if="randomError" class="notice notice--error" role="alert">
+          {{ randomError }}
+        </p>
+      </section>
+
       <section
         v-if="games.length === 0"
         class="empty-lobby"

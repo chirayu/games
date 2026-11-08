@@ -68,17 +68,18 @@ type ActiveGameSummary struct {
 
 // GameAllocation is a durable request to assign two players to one game.
 type GameAllocation struct {
-	ID             string
-	RequesterID    string
-	OpponentID     string
-	Mode           string
-	State          string
-	IdempotencyKey string
-	GameID         string
-	FailureReason  string
-	ExpiresAt      *time.Time
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	ID                  string
+	RequesterID         string
+	OpponentID          string
+	Mode                string
+	AllowedOpponentType string
+	State               string
+	IdempotencyKey      string
+	GameID              string
+	FailureReason       string
+	ExpiresAt           *time.Time
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
 }
 
 // SpecifiedChallenge is one pending allocation with public participant names.
@@ -287,7 +288,8 @@ func (repository *Repository) CreateGameAllocation(ctx context.Context, candidat
 	queries := generated.New(connection)
 	rows, err := queries.CreateGameAllocation(ctx, generated.CreateGameAllocationParams{
 		ID: candidate.ID, RequesterID: candidate.RequesterID, OpponentID: nullableString(candidate.OpponentID),
-		Mode: candidate.Mode, State: candidate.State, IdempotencyKey: candidate.IdempotencyKey,
+		Mode: candidate.Mode, AllowedOpponentType: candidate.AllowedOpponentType,
+		State: candidate.State, IdempotencyKey: candidate.IdempotencyKey,
 		GameID: nullableString(candidate.GameID), FailureReason: nullableString(candidate.FailureReason),
 		ExpiresAt: nullableTime(candidate.ExpiresAt), CreatedAt: candidate.CreatedAt, UpdatedAt: candidate.UpdatedAt,
 	})
@@ -297,6 +299,11 @@ func (repository *Repository) CreateGameAllocation(ctx context.Context, candidat
 	row, err := queries.GetGameAllocationByRequesterKey(ctx, generated.GetGameAllocationByRequesterKeyParams{
 		RequesterID: candidate.RequesterID, IdempotencyKey: candidate.IdempotencyKey,
 	})
+	if errors.Is(err, sql.ErrNoRows) && candidate.Mode == "random" {
+		row, err = queries.GetEquivalentQueuedRandomAllocation(ctx, generated.GetEquivalentQueuedRandomAllocationParams{
+			RequesterID: candidate.RequesterID, AllowedOpponentType: candidate.AllowedOpponentType,
+		})
+	}
 	if err != nil {
 		return GameAllocation{}, false, fmt.Errorf("get idempotent allocation: %w", err)
 	}
@@ -304,6 +311,82 @@ func (repository *Repository) CreateGameAllocation(ctx context.Context, candidat
 		return GameAllocation{}, false, fmt.Errorf("commit allocation transaction: %w", err)
 	}
 	return allocationFromRow(row), rows == 1, nil
+}
+
+// MatchRandomAllocation claims the oldest compatible queue entry and creates one shared game.
+func (repository *Repository) MatchRandomAllocation(ctx context.Context, allocationID string, game Game) (GameAllocation, bool, error) {
+	connection, err := repository.database.Conn(ctx)
+	if err != nil {
+		return GameAllocation{}, false, fmt.Errorf("acquire matchmaking connection: %w", err)
+	}
+	defer connection.Close()
+	if _, err := connection.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+		return GameAllocation{}, false, fmt.Errorf("begin matchmaking transaction: %w", err)
+	}
+	defer func() { _, _ = connection.ExecContext(context.Background(), "ROLLBACK") }()
+	queries := generated.New(connection)
+	row, err := queries.GetGameAllocation(ctx, allocationID)
+	if err != nil {
+		return GameAllocation{}, false, fmt.Errorf("get matchmaking allocation: %w", err)
+	}
+	allocation := allocationFromRow(row)
+	if allocation.State == "allocated" {
+		if _, err := connection.ExecContext(ctx, "COMMIT"); err != nil {
+			return GameAllocation{}, false, fmt.Errorf("commit allocated matchmaking read: %w", err)
+		}
+		return allocation, true, nil
+	}
+	if allocation.Mode != "random" || allocation.State != "queued" || allocation.AllowedOpponentType != "human" {
+		return GameAllocation{}, false, ErrAllocationTransition
+	}
+	candidateRow, err := queries.GetRandomMatchCandidate(ctx, generated.GetRandomMatchCandidateParams{
+		AllowedOpponentType: allocation.AllowedOpponentType, RequesterID: allocation.RequesterID, ID: allocation.ID,
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		if _, err := connection.ExecContext(ctx, "COMMIT"); err != nil {
+			return GameAllocation{}, false, fmt.Errorf("commit unmatched allocation: %w", err)
+		}
+		return allocation, false, nil
+	}
+	if err != nil {
+		return GameAllocation{}, false, fmt.Errorf("find random match candidate: %w", err)
+	}
+	candidate := allocationFromRow(candidateRow)
+	if err := queries.CreateGame(ctx, generated.CreateGameParams{
+		ID: game.ID, BoardLetters: game.BoardLetters, TileOwners: game.TileOwners,
+		CurrentPlayer: game.CurrentPlayer, Status: game.Status, Version: game.Version,
+		CreatedAt: game.CreatedAt, UpdatedAt: game.UpdatedAt,
+	}); err != nil {
+		return GameAllocation{}, false, fmt.Errorf("create matched game: %w", err)
+	}
+	for seat, playerID := range []string{candidate.RequesterID, allocation.RequesterID} {
+		if err := queries.CreateGameSeat(ctx, generated.CreateGameSeatParams{
+			GameID: game.ID, Seat: int64(seat + 1), PlayerID: playerID, CreatedAt: game.CreatedAt,
+		}); err != nil {
+			return GameAllocation{}, false, fmt.Errorf("create matched game seat: %w", err)
+		}
+	}
+	updates := []generated.AllocateRandomGameAllocationParams{
+		{OpponentID: nullableString(allocation.RequesterID), GameID: nullableString(game.ID), UpdatedAt: game.UpdatedAt, ID: candidate.ID},
+		{OpponentID: nullableString(candidate.RequesterID), GameID: nullableString(game.ID), UpdatedAt: game.UpdatedAt, ID: allocation.ID},
+	}
+	for _, update := range updates {
+		rows, err := queries.AllocateRandomGameAllocation(ctx, update)
+		if err != nil || rows != 1 {
+			if err == nil {
+				err = ErrAllocationTransition
+			}
+			return GameAllocation{}, false, fmt.Errorf("claim random allocation: %w", err)
+		}
+	}
+	matchedRow, err := queries.GetGameAllocation(ctx, allocation.ID)
+	if err != nil {
+		return GameAllocation{}, false, fmt.Errorf("get matched allocation: %w", err)
+	}
+	if _, err := connection.ExecContext(ctx, "COMMIT"); err != nil {
+		return GameAllocation{}, false, fmt.Errorf("commit random match: %w", err)
+	}
+	return allocationFromRow(matchedRow), true, nil
 }
 
 // GetGameAllocation retrieves one allocation without applying authorization policy.
@@ -814,7 +897,8 @@ func registeredPlayerFromRow(row generated.RegisteredPlayer) RegisteredPlayer {
 
 func allocationFromRow(row generated.GameAllocation) GameAllocation {
 	allocation := GameAllocation{
-		ID: row.ID, RequesterID: row.RequesterID, Mode: row.Mode, State: row.State,
+		ID: row.ID, RequesterID: row.RequesterID, Mode: row.Mode,
+		AllowedOpponentType: row.AllowedOpponentType, State: row.State,
 		IdempotencyKey: row.IdempotencyKey, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
 	}
 	if row.OpponentID.Valid {

@@ -10,6 +10,7 @@ import (
 )
 
 type Querier interface {
+	AllocateRandomGameAllocation(ctx context.Context, arg AllocateRandomGameAllocationParams) (int64, error)
 	CancelGameAllocation(ctx context.Context, arg CancelGameAllocationParams) (int64, error)
 	CompleteGameAllocation(ctx context.Context, arg CompleteGameAllocationParams) (int64, error)
 	CreateGame(ctx context.Context, arg CreateGameParams) error
@@ -22,10 +23,12 @@ type Querier interface {
 	DeletePlayerSession(ctx context.Context, tokenHash []byte) (int64, error)
 	ExpireDueGameAllocations(ctx context.Context, now time.Time) (int64, error)
 	ExpireGameAllocation(ctx context.Context, arg ExpireGameAllocationParams) (int64, error)
+	GetEquivalentQueuedRandomAllocation(ctx context.Context, arg GetEquivalentQueuedRandomAllocationParams) (GameAllocation, error)
 	GetGame(ctx context.Context, id string) (Game, error)
 	GetGameAllocation(ctx context.Context, id string) (GameAllocation, error)
 	GetGameAllocationByRequesterKey(ctx context.Context, arg GetGameAllocationByRequesterKeyParams) (GameAllocation, error)
 	GetGameSeatByPlayer(ctx context.Context, arg GetGameSeatByPlayerParams) (GameSeat, error)
+	GetRandomMatchCandidate(ctx context.Context, arg GetRandomMatchCandidateParams) (GameAllocation, error)
 	GetRegisteredPlayerByID(ctx context.Context, id string) (RegisteredPlayer, error)
 	GetRegisteredPlayerByNormalizedName(ctx context.Context, normalizedName string) (RegisteredPlayer, error)
 	GetRegisteredPlayerBySessionHash(ctx context.Context, arg GetRegisteredPlayerBySessionHashParams) (RegisteredPlayer, error)

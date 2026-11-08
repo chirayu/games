@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -212,6 +213,139 @@ func TestSpecifiedChallengeAcceptCancelRaceHasOneWinner(t *testing.T) {
 	}
 }
 
+func TestRandomHumanMatchmakingQueuesMatchesAndAvoidsDuplicates(t *testing.T) {
+	handler, _, _ := newIntegrationHandler(t, true)
+	alice, aliceCookie := loginLobbyPlayer(t, handler, "Alice")
+	bob, bobCookie := loginLobbyPlayer(t, handler, "Bob")
+
+	aliceQueue := createAllocationRequest(t, handler, aliceCookie, "alice-random", "random", "", http.StatusCreated)
+	if aliceQueue.State != "queued" || len(aliceQueue.AllowedOpponentTypes) != 1 || aliceQueue.AllowedOpponentTypes[0] != "human" {
+		t.Fatalf("Alice queue = %#v", aliceQueue)
+	}
+	duplicate := createAllocationRequest(t, handler, aliceCookie, "alice-random-again", "random", "", http.StatusOK)
+	if duplicate.ID != aliceQueue.ID {
+		t.Fatalf("duplicate queue ID = %q, want %q", duplicate.ID, aliceQueue.ID)
+	}
+
+	bobMatch := createAllocationRequest(t, handler, bobCookie, "bob-random", "random", "", http.StatusCreated)
+	if bobMatch.State != "allocated" || bobMatch.GameID == "" || bobMatch.OpponentID != alice.ID {
+		t.Fatalf("Bob match = %#v", bobMatch)
+	}
+	aliceMatch := getAllocationRequest(t, handler, aliceCookie, aliceQueue.ID, http.StatusOK)
+	if aliceMatch.State != "allocated" || aliceMatch.GameID != bobMatch.GameID || aliceMatch.OpponentID != bob.ID {
+		t.Fatalf("Alice match = %#v", aliceMatch)
+	}
+	if view := loadGame(t, handler, bobMatch.GameID, aliceCookie); view.PlayerSeat != 1 {
+		t.Fatalf("oldest queued player seat = %d, want 1", view.PlayerSeat)
+	}
+	if view := loadGame(t, handler, bobMatch.GameID, bobCookie); view.PlayerSeat != 2 {
+		t.Fatalf("matching player seat = %d, want 2", view.PlayerSeat)
+	}
+}
+
+func TestRandomHumanMatchmakingRejectsBotSubstitution(t *testing.T) {
+	handler, _, _ := newIntegrationHandler(t, true)
+	_, aliceCookie := loginLobbyPlayer(t, handler, "Alice")
+	body, _ := json.Marshal(map[string]any{
+		"mode": "random", "allowedOpponentTypes": []string{"bot"},
+	})
+	request := newMutationRequest(http.MethodPost, "/api/v1/game-allocations", bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Idempotency-Key", "humans-only")
+	request.AddCookie(aliceCookie)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	assertAPIError(t, response, http.StatusUnprocessableEntity, "invalid_allocation")
+}
+
+func TestCancelledRandomAllocationCannotBeMatched(t *testing.T) {
+	handler, _, _ := newIntegrationHandler(t, true)
+	_, aliceCookie := loginLobbyPlayer(t, handler, "Alice")
+	_, bobCookie := loginLobbyPlayer(t, handler, "Bob")
+	aliceQueue := createAllocationRequest(t, handler, aliceCookie, "cancel-random", "random", "", http.StatusCreated)
+	deleteAllocationRequest(t, handler, aliceCookie, aliceQueue.ID, http.StatusOK)
+	bobQueue := createAllocationRequest(t, handler, bobCookie, "bob-alone", "random", "", http.StatusCreated)
+	if bobQueue.State != "queued" {
+		t.Fatalf("Bob allocation state = %q, want queued", bobQueue.State)
+	}
+}
+
+func TestRandomMatchmakingRecoversQueuedAllocationAfterRestart(t *testing.T) {
+	databasePath := filepath.Join(t.TempDir(), "letterpress.db")
+	now := time.Date(2026, time.November, 1, 10, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return now }
+	openHandler := func() (*sqlite.Repository, http.Handler) {
+		repository, err := sqlite.Open(context.Background(), databasePath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		service := app.NewServiceWithDependenciesAndClock(repository, game.NewCryptoBoardGenerator(), game.MVPWordValidator{}, clock)
+		return repository, newTestHTTPHandler(service, Config{InsecureCookies: true, AllowedOrigin: testOrigin, Now: clock})
+	}
+
+	repository, handler := openHandler()
+	_, aliceCookie := loginLobbyPlayer(t, handler, "Alice")
+	aliceQueue := createAllocationRequest(t, handler, aliceCookie, "restart-random", "random", "", http.StatusCreated)
+	if err := repository.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	repository, handler = openHandler()
+	t.Cleanup(func() { _ = repository.Close() })
+	_, bobCookie := loginLobbyPlayer(t, handler, "Bob")
+	bobMatch := createAllocationRequest(t, handler, bobCookie, "after-restart", "random", "", http.StatusCreated)
+	if bobMatch.State != "allocated" || bobMatch.GameID == "" {
+		t.Fatalf("match after restart = %#v", bobMatch)
+	}
+	aliceMatch := getAllocationRequest(t, handler, aliceCookie, aliceQueue.ID, http.StatusOK)
+	if aliceMatch.GameID != bobMatch.GameID {
+		t.Fatalf("recovered game IDs = %q and %q", aliceMatch.GameID, bobMatch.GameID)
+	}
+}
+
+func TestConcurrentRandomMatchmakersDoNotAllocatePlayerTwice(t *testing.T) {
+	handler, _, _ := newIntegrationHandler(t, true)
+	_, aliceCookie := loginLobbyPlayer(t, handler, "Alice")
+	_, bobCookie := loginLobbyPlayer(t, handler, "Bob")
+	_, carolCookie := loginLobbyPlayer(t, handler, "Carol")
+	alice := createAllocationRequest(t, handler, aliceCookie, "alice-waits", "random", "", http.StatusCreated)
+
+	start := make(chan struct{})
+	results := make(chan app.GameAllocation, 2)
+	var workers sync.WaitGroup
+	for index, cookie := range []*http.Cookie{bobCookie, carolCookie} {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			<-start
+			results <- createAllocationRequest(t, handler, cookie, fmt.Sprintf("worker-%d", index), "random", "", http.StatusCreated)
+		}()
+	}
+	close(start)
+	workers.Wait()
+	close(results)
+
+	allocatedGame := ""
+	queued := 0
+	for result := range results {
+		if result.State == "queued" {
+			queued++
+			continue
+		}
+		if result.State != "allocated" || result.GameID == "" {
+			t.Fatalf("worker result = %#v", result)
+		}
+		allocatedGame = result.GameID
+	}
+	if queued != 1 || allocatedGame == "" {
+		t.Fatalf("queued/game = %d/%q, want 1/non-empty", queued, allocatedGame)
+	}
+	alice = getAllocationRequest(t, handler, aliceCookie, alice.ID, http.StatusOK)
+	if alice.State != "allocated" || alice.GameID != allocatedGame {
+		t.Fatalf("Alice result = %#v", alice)
+	}
+}
+
 func actionAllocationRequest(t *testing.T, handler http.Handler, cookie *http.Cookie, id, action string, status int) app.GameAllocation {
 	t.Helper()
 	request := newMutationRequest(http.MethodPost, "/api/v1/game-allocations/"+id+"/"+action, nil)
@@ -277,7 +411,10 @@ func createAllocationRequest(
 	status int,
 ) app.GameAllocation {
 	t.Helper()
-	body, _ := json.Marshal(map[string]string{"mode": mode, "opponentId": opponentID})
+	body, _ := json.Marshal(map[string]any{
+		"mode": mode, "opponentId": opponentID,
+		"allowedOpponentTypes": map[bool][]string{true: {"human"}, false: nil}[mode == "random"],
+	})
 	request := newMutationRequest(http.MethodPost, "/api/v1/game-allocations", bytes.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Idempotency-Key", key)

@@ -260,8 +260,9 @@ func (handler *handler) createAllocation(response http.ResponseWriter, request *
 		return
 	}
 	var input struct {
-		Mode       string `json:"mode"`
-		OpponentID string `json:"opponentId"`
+		Mode                 string   `json:"mode"`
+		OpponentID           string   `json:"opponentId"`
+		AllowedOpponentTypes []string `json:"allowedOpponentTypes"`
 	}
 	decoder := json.NewDecoder(http.MaxBytesReader(response, request.Body, 4096))
 	decoder.DisallowUnknownFields()
@@ -275,7 +276,7 @@ func (handler *handler) createAllocation(response http.ResponseWriter, request *
 	}
 	allocation, created, err := handler.service.CreateAllocation(
 		request.Context(), handler.playerSessionToken(request), request.Header.Get("Idempotency-Key"),
-		input.Mode, input.OpponentID,
+		input.Mode, input.OpponentID, input.AllowedOpponentTypes,
 	)
 	if handler.writeAllocationError(response, err) {
 		return

@@ -1,14 +1,30 @@
 -- name: CreateGameAllocation :execrows
 INSERT OR IGNORE INTO game_allocations (
-    id, requester_id, opponent_id, mode, state, idempotency_key,
+    id, requester_id, opponent_id, mode, allowed_opponent_type, state, idempotency_key,
     game_id, failure_reason, expires_at, created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: GetGameAllocation :one
 SELECT * FROM game_allocations WHERE id = ?;
 
 -- name: GetGameAllocationByRequesterKey :one
 SELECT * FROM game_allocations WHERE requester_id = ? AND idempotency_key = ?;
+
+-- name: GetEquivalentQueuedRandomAllocation :one
+SELECT * FROM game_allocations
+WHERE requester_id = ? AND mode = 'random' AND allowed_opponent_type = ? AND state = 'queued'
+ORDER BY created_at ASC, id ASC
+LIMIT 1;
+
+-- name: GetRandomMatchCandidate :one
+SELECT * FROM game_allocations
+WHERE mode = 'random'
+  AND allowed_opponent_type = sqlc.arg(allowed_opponent_type)
+  AND state = 'queued'
+  AND requester_id != sqlc.arg(requester_id)
+  AND id != sqlc.arg(id)
+ORDER BY created_at ASC, id ASC
+LIMIT 1;
 
 -- name: CancelGameAllocation :execrows
 UPDATE game_allocations
@@ -19,6 +35,12 @@ WHERE id = ? AND requester_id = ? AND state IN ('pending_acceptance', 'queued');
 UPDATE game_allocations
 SET state = 'allocated', opponent_id = ?, game_id = ?, updated_at = ?
 WHERE id = ? AND state IN ('pending_acceptance', 'queued');
+
+-- name: AllocateRandomGameAllocation :execrows
+UPDATE game_allocations
+SET state = 'allocated', opponent_id = sqlc.arg(opponent_id),
+    game_id = sqlc.arg(game_id), updated_at = sqlc.arg(updated_at)
+WHERE id = sqlc.arg(id) AND mode = 'random' AND state = 'queued';
 
 -- name: ExpireGameAllocation :execrows
 UPDATE game_allocations

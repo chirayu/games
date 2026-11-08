@@ -25,16 +25,17 @@ var (
 
 // GameAllocation is the public durable allocation resource.
 type GameAllocation struct {
-	ID            string     `json:"id"`
-	RequesterID   string     `json:"requesterId"`
-	OpponentID    string     `json:"opponentId,omitempty"`
-	Mode          string     `json:"mode"`
-	State         string     `json:"state"`
-	GameID        string     `json:"gameId,omitempty"`
-	FailureReason string     `json:"failureReason,omitempty"`
-	ExpiresAt     *time.Time `json:"expiresAt,omitempty"`
-	CreatedAt     time.Time  `json:"createdAt"`
-	UpdatedAt     time.Time  `json:"updatedAt"`
+	ID                   string     `json:"id"`
+	RequesterID          string     `json:"requesterId"`
+	OpponentID           string     `json:"opponentId,omitempty"`
+	Mode                 string     `json:"mode"`
+	AllowedOpponentTypes []string   `json:"allowedOpponentTypes"`
+	State                string     `json:"state"`
+	GameID               string     `json:"gameId,omitempty"`
+	FailureReason        string     `json:"failureReason,omitempty"`
+	ExpiresAt            *time.Time `json:"expiresAt,omitempty"`
+	CreatedAt            time.Time  `json:"createdAt"`
+	UpdatedAt            time.Time  `json:"updatedAt"`
 }
 
 // ChallengeSummary is a participant-scoped pending specified challenge.
@@ -50,7 +51,7 @@ type ChallengeSummary struct {
 // CreateAllocation creates an idempotent durable request for the authenticated player.
 func (service *Service) CreateAllocation(
 	ctx context.Context,
-	token, idempotencyKey, mode, opponentID string,
+	token, idempotencyKey, mode, opponentID string, allowedOpponentTypes []string,
 ) (GameAllocation, bool, error) {
 	requester, err := service.CurrentPlayer(ctx, token)
 	if err != nil {
@@ -61,6 +62,7 @@ func (service *Service) CreateAllocation(
 		return GameAllocation{}, false, ErrInvalidAllocation
 	}
 	state := ""
+	allowedOpponentType := ""
 	var expiresAt *time.Time
 	switch mode {
 	case "specified":
@@ -73,11 +75,20 @@ func (service *Service) CreateAllocation(
 			return GameAllocation{}, false, fmt.Errorf("resolve allocation opponent: %w", err)
 		}
 		state = "pending_acceptance"
+		allowedOpponentType = "human"
 	case "random", "bot":
 		if opponentID != "" {
 			return GameAllocation{}, false, ErrInvalidAllocation
 		}
 		state = "queued"
+		if mode == "random" {
+			if len(allowedOpponentTypes) != 1 || allowedOpponentTypes[0] != "human" {
+				return GameAllocation{}, false, ErrInvalidAllocation
+			}
+			allowedOpponentType = "human"
+		} else {
+			allowedOpponentType = "bot"
+		}
 	default:
 		return GameAllocation{}, false, ErrInvalidAllocation
 	}
@@ -92,16 +103,52 @@ func (service *Service) CreateAllocation(
 	}
 	stored, created, err := service.store.CreateGameAllocation(ctx, sqlite.GameAllocation{
 		ID: allocationID, RequesterID: requester.ID, OpponentID: opponentID,
-		Mode: mode, State: state, IdempotencyKey: idempotencyKey,
+		Mode: mode, AllowedOpponentType: allowedOpponentType,
+		State: state, IdempotencyKey: idempotencyKey,
 		ExpiresAt: expiresAt, CreatedAt: now, UpdatedAt: now,
 	})
 	if err != nil {
 		return GameAllocation{}, false, fmt.Errorf("persist game allocation: %w", err)
 	}
-	if stored.Mode != mode || stored.OpponentID != opponentID {
+	if stored.Mode != mode || stored.OpponentID != opponentID || stored.AllowedOpponentType != allowedOpponentType {
 		return GameAllocation{}, false, ErrIdempotencyConflict
 	}
+	if mode == "random" {
+		matched, _, err := service.matchRandomAllocation(ctx, stored)
+		if err != nil {
+			return GameAllocation{}, false, err
+		}
+		stored = matched
+	}
 	return allocationView(stored), created, nil
+}
+
+func (service *Service) matchRandomAllocation(ctx context.Context, allocation sqlite.GameAllocation) (sqlite.GameAllocation, bool, error) {
+	if allocation.State == "allocated" {
+		return allocation, true, nil
+	}
+	domainGame, err := game.New(game.DefaultWidth, game.DefaultHeight, service.generator, service.validator)
+	if err != nil {
+		return sqlite.GameAllocation{}, false, fmt.Errorf("generate matched board: %w", err)
+	}
+	gameID, err := service.randomToken(gameIDBytes)
+	if err != nil {
+		return sqlite.GameAllocation{}, false, fmt.Errorf("generate matched game ID: %w", err)
+	}
+	now := service.now().UTC()
+	board := domainGame.Board()
+	matched, allocated, err := service.store.MatchRandomAllocation(ctx, allocation.ID, sqlite.Game{
+		ID: gameID, BoardLetters: board.Letters(), TileOwners: make([]byte, board.Len()),
+		CurrentPlayer: int64(domainGame.CurrentPlayer()), Status: string(domainGame.Status()),
+		Version: 0, CreatedAt: now, UpdatedAt: now,
+	})
+	if errors.Is(err, sqlite.ErrAllocationTransition) {
+		return sqlite.GameAllocation{}, false, ErrInvalidAllocationState
+	}
+	if err != nil {
+		return sqlite.GameAllocation{}, false, fmt.Errorf("match random allocation: %w", err)
+	}
+	return matched, allocated, nil
 }
 
 // GetAllocation returns a private allocation only to its participants.
@@ -278,7 +325,8 @@ func allocationView(stored sqlite.GameAllocation) GameAllocation {
 	return GameAllocation{
 		ID: stored.ID, RequesterID: stored.RequesterID, OpponentID: stored.OpponentID,
 		Mode: stored.Mode, State: stored.State, GameID: stored.GameID,
-		FailureReason: stored.FailureReason, ExpiresAt: stored.ExpiresAt,
+		AllowedOpponentTypes: []string{stored.AllowedOpponentType},
+		FailureReason:        stored.FailureReason, ExpiresAt: stored.ExpiresAt,
 		CreatedAt: stored.CreatedAt, UpdatedAt: stored.UpdatedAt,
 	}
 }
