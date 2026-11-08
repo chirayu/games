@@ -133,7 +133,7 @@ func TestAssignedGamePersistsRegisteredPlayerSeats(t *testing.T) {
 	}
 }
 
-func TestLegacyCreationAndInvitationRoutesAreUnavailable(t *testing.T) {
+func TestRemovedDirectCreationAndGameSessionRoutesAreUnavailable(t *testing.T) {
 	handler, _, _ := newIntegrationHandler(t, false)
 	for _, test := range []struct {
 		target string

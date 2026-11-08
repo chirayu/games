@@ -155,6 +155,9 @@ search result, accept or decline incoming challenges, cancel outgoing ones, and
 enter the allocated game. Persisted random-human matchmaking is also available:
 players may join or cancel the queue, and compatible oldest-first requests are
 atomically assigned one shared game.
+The lobby's unified Start game flow is the only new-game journey and restores
+pending allocation state after reload. It contains no share-link or invitation
+compatibility path.
 
 ## Documentation
 

@@ -304,6 +304,11 @@ func (repository *Repository) CreateGameAllocation(ctx context.Context, candidat
 			RequesterID: candidate.RequesterID, AllowedOpponentType: candidate.AllowedOpponentType,
 		})
 	}
+	if errors.Is(err, sql.ErrNoRows) && candidate.Mode == "specified" {
+		row, err = queries.GetEquivalentPendingSpecifiedAllocation(ctx, generated.GetEquivalentPendingSpecifiedAllocationParams{
+			RequesterID: candidate.RequesterID, OpponentID: nullableString(candidate.OpponentID),
+		})
+	}
 	if err != nil {
 		return GameAllocation{}, false, fmt.Errorf("get idempotent allocation: %w", err)
 	}
@@ -311,6 +316,20 @@ func (repository *Repository) CreateGameAllocation(ctx context.Context, candidat
 		return GameAllocation{}, false, fmt.Errorf("commit allocation transaction: %w", err)
 	}
 	return allocationFromRow(row), rows == 1, nil
+}
+
+// GetQueuedRandomAllocation returns a player's durable random-human queue entry.
+func (repository *Repository) GetQueuedRandomAllocation(ctx context.Context, playerID, opponentType string, now time.Time) (GameAllocation, error) {
+	if _, err := repository.queries.ExpireDueGameAllocations(ctx, now); err != nil {
+		return GameAllocation{}, fmt.Errorf("expire due allocations: %w", err)
+	}
+	row, err := repository.queries.GetQueuedRandomAllocation(ctx, generated.GetQueuedRandomAllocationParams{
+		RequesterID: playerID, AllowedOpponentType: opponentType,
+	})
+	if err != nil {
+		return GameAllocation{}, err
+	}
+	return allocationFromRow(row), nil
 }
 
 // MatchRandomAllocation claims the oldest compatible queue entry and creates one shared game.

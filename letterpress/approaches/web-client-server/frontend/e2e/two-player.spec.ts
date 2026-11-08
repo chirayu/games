@@ -13,30 +13,41 @@ async function playTiles(page: Page, indexes: number[], nextVersion: number) {
   await expectVersion(page, nextVersion);
 }
 
+async function register(page: Page, name: string) {
+  await page.goto("/");
+  await page.getByLabel("Player name").fill(name);
+  await page.getByRole("button", { name: "Enter Letterpress" }).click();
+  await expect(page).toHaveURL(/\/lobby$/);
+}
+
 test("two isolated players resume, recover from stale state, and finish a game", async ({
   browser,
 }) => {
-  const playerOneContext = await browser.newContext({
-    permissions: ["clipboard-read", "clipboard-write"],
-  });
+  const playerOneContext = await browser.newContext();
   const playerTwoContext = await browser.newContext();
   const playerOne = await playerOneContext.newPage();
   const playerTwo = await playerTwoContext.newPage();
 
-  await playerOne.goto("/games/new");
-  await playerOne.getByRole("button", { name: "Create game" }).click();
-  const invitation = playerOne.getByLabel("Player 2 invitation");
-  await expect(invitation).toBeVisible();
-  const invitationURL = await invitation.inputValue();
-  await playerOne.getByRole("button", { name: "Copy link" }).click();
-  await expect(playerOne.getByRole("button", { name: "Copied" })).toBeVisible();
-  await playerOne.getByRole("link", { name: "Continue to your game" }).click();
-  await expectVersion(playerOne, 0);
-  const gameURL = playerOne.url();
+  await register(playerOne, "E2E Alice");
+  await register(playerTwo, "E2E Bob");
+  await playerOne.getByRole("button", { name: "Specific player" }).click();
+  await playerOne.getByLabel("Player name").fill("E2E Bob");
+  await playerOne.getByRole("button", { name: "Search" }).click();
+  await playerOne.getByRole("button", { name: "Challenge" }).click();
+  await expect(
+    playerOne.getByRole("heading", { name: "Sent challenges" }),
+  ).toBeVisible();
+  await expect(playerOne.getByText(/copy|share|invitation/i)).toHaveCount(0);
 
-  await playerTwo.goto(invitationURL);
-  await expect(playerTwo).toHaveURL(gameURL);
+  await playerTwo.reload();
+  await playerTwo.getByRole("button", { name: "Accept" }).click();
+  await expect(playerTwo).toHaveURL(/\/games\//);
+  const gameURL = playerTwo.url();
+  await playerOne.reload();
+  await playerOne.getByRole("link", { name: /E2E Bob/ }).click();
+  await expect(playerOne).toHaveURL(gameURL);
   await expectVersion(playerTwo, 0);
+  await expectVersion(playerOne, 0);
   expect(await playerOne.getByRole("gridcell").allTextContents()).toEqual(
     await playerTwo.getByRole("gridcell").allTextContents(),
   );
@@ -120,4 +131,36 @@ test("two isolated players resume, recover from stale state, and finish a game",
   await staleContext.close();
   await playerOneContext.close();
   await playerTwoContext.close();
+});
+
+test("random start mode restores a queued player and allocates one shared game", async ({
+  browser,
+}) => {
+  const firstContext = await browser.newContext();
+  const secondContext = await browser.newContext();
+  const first = await firstContext.newPage();
+  const second = await secondContext.newPage();
+
+  await register(first, "E2E Random One");
+  await register(second, "E2E Random Two");
+  await first.getByRole("button", { name: "Random player" }).click();
+  await first.getByRole("button", { name: "Find a human opponent" }).click();
+  await expect(
+    first.getByText("Looking for another human player…"),
+  ).toBeVisible();
+  await first.reload();
+  await expect(
+    first.getByText("Looking for another human player…"),
+  ).toBeVisible();
+
+  await second.getByRole("button", { name: "Random player" }).click();
+  await second.getByRole("button", { name: "Find a human opponent" }).click();
+  await expect(second).toHaveURL(/\/games\//);
+  await expect(first).toHaveURL(/\/games\//, { timeout: 10_000 });
+  expect(first.url()).toBe(second.url());
+  await expectVersion(first, 0);
+  await expectVersion(second, 0);
+
+  await firstContext.close();
+  await secondContext.close();
 });

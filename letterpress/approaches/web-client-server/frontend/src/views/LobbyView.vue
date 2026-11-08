@@ -10,7 +10,7 @@ import {
   createSpecifiedChallenge,
   declineChallenge,
   getAllocation,
-  getPendingChallenges,
+  getLobbyAllocations,
   type ChallengeSummary,
   type GameAllocation,
 } from "../api/allocations";
@@ -39,6 +39,7 @@ const challengeBusy = ref("");
 const randomAllocation = ref<GameAllocation>();
 const randomBusy = ref(false);
 const randomError = ref("");
+const startMode = ref<"specific" | "random">();
 let randomPoll: number | undefined;
 
 const incomingChallenges = computed(() =>
@@ -135,7 +136,15 @@ async function refreshLobby() {
 
 async function loadChallenges() {
   try {
-    challenges.value = await getPendingChallenges();
+    const allocations = await getLobbyAllocations();
+    challenges.value = allocations.items;
+    if (allocations.randomAllocation) {
+      randomAllocation.value = allocations.randomAllocation;
+      startMode.value = "random";
+      if (randomPoll === undefined) {
+        randomPoll = window.setInterval(pollRandomAllocation, 5000);
+      }
+    }
   } catch (error) {
     if (error instanceof APIError && error.status === 401) {
       gamesState.value = "stale";
@@ -148,6 +157,7 @@ async function createChallenge(opponentId: string) {
   challengeError.value = "";
   try {
     await createSpecifiedChallenge(opponentId);
+    startMode.value = undefined;
     await loadChallenges();
   } catch {
     challengeError.value = "The challenge could not be sent. Try again.";
@@ -283,8 +293,43 @@ async function logout() {
       </button>
     </section>
     <div v-else class="lobby-content">
-      <section class="random-matchmaking" aria-labelledby="random-title">
-        <h2 id="random-title" class="section-title">Play a random player</h2>
+      <section class="start-game" aria-labelledby="start-game-title">
+        <h2 id="start-game-title" class="section-title">Start game</h2>
+        <div
+          v-if="!startMode && randomAllocation?.state !== 'queued'"
+          class="start-game-choices"
+        >
+          <button
+            class="primary-action"
+            type="button"
+            @click="startMode = 'specific'"
+          >
+            Specific player
+          </button>
+          <button
+            class="secondary-action"
+            type="button"
+            @click="startMode = 'random'"
+          >
+            Random player
+          </button>
+        </div>
+        <button
+          v-else-if="randomAllocation?.state !== 'queued'"
+          class="text-action"
+          type="button"
+          @click="startMode = undefined"
+        >
+          Back to choices
+        </button>
+      </section>
+
+      <section
+        v-if="startMode === 'random' || randomAllocation?.state === 'queued'"
+        class="random-matchmaking"
+        aria-labelledby="random-title"
+      >
+        <h2 id="random-title" class="section-title">Random player</h2>
         <p v-if="randomAllocation?.state === 'queued'" role="status">
           Looking for another human player…
         </p>
@@ -427,8 +472,12 @@ async function logout() {
         Load more games
       </button>
 
-      <section class="player-search" aria-labelledby="find-player-title">
-        <h2 id="find-player-title" class="section-title">Find a player</h2>
+      <section
+        v-if="startMode === 'specific'"
+        class="player-search"
+        aria-labelledby="find-player-title"
+      >
+        <h2 id="find-player-title" class="section-title">Specific player</h2>
         <form class="search-form" @submit.prevent="runSearch(false)">
           <label class="visually-hidden" for="player-search">Player name</label>
           <input

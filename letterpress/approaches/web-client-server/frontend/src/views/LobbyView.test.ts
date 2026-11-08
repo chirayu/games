@@ -93,16 +93,46 @@ describe("LobbyView", () => {
         response(200, {
           data: { items: [{ id: "p2", name: "Blue Fox", type: "human" }] },
         }),
+      )
+      .mockResolvedValueOnce(
+        response(201, {
+          data: {
+            id: "challenge-1",
+            mode: "specified",
+            state: "pending_acceptance",
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        response(200, {
+          data: {
+            items: [
+              {
+                allocationId: "challenge-1",
+                direction: "outgoing",
+                requester: { id: "p1", name: "Alice", type: "human" },
+                opponent: { id: "p2", name: "Blue Fox", type: "human" },
+                expiresAt: "2026-11-15T12:00:00Z",
+                createdAt: "2026-11-08T12:00:00Z",
+              },
+            ],
+          },
+        }),
       );
     await establishAlice(fetchMock);
     const wrapper = mountLobby();
     await flushPromises();
     expect(wrapper.text()).toContain("No active games yet");
 
+    await wrapper.get(".start-game .primary-action").trigger("click");
     await wrapper.get("#player-search").setValue("blue");
     await wrapper.get(".search-form").trigger("submit");
     await flushPromises();
     expect(wrapper.get('[data-player-id="p2"]').text()).toContain("Blue Fox");
+    await wrapper.get('[data-player-id="p2"] button').trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).toContain("Sent challenges");
+    expect(wrapper.text()).not.toMatch(/copy|share|invitation/i);
   });
 
   it("shows stale-session and transient failure states", async () => {
@@ -194,6 +224,7 @@ describe("LobbyView", () => {
     const wrapper = mountLobby();
     await flushPromises();
 
+    await wrapper.get(".start-game .secondary-action").trigger("click");
     await wrapper.get(".random-matchmaking .primary-action").trigger("click");
     await flushPromises();
 
@@ -229,6 +260,7 @@ describe("LobbyView", () => {
     const wrapper = mountLobby();
     await flushPromises();
 
+    await wrapper.get(".start-game .secondary-action").trigger("click");
     await wrapper.get(".random-matchmaking .primary-action").trigger("click");
     await flushPromises();
     expect(wrapper.text()).toContain("Looking for another human player");
@@ -240,6 +272,35 @@ describe("LobbyView", () => {
       expect.objectContaining({ method: "DELETE" }),
     );
     expect(wrapper.text()).toContain("Find a human opponent");
+    wrapper.unmount();
+  });
+
+  it("restores a queued random allocation after lobby reload", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        response(200, { data: { id: "p1", name: "Alice" } }),
+      )
+      .mockResolvedValueOnce(response(200, { data: { items: [] } }))
+      .mockResolvedValueOnce(
+        response(200, {
+          data: {
+            items: [],
+            randomAllocation: {
+              id: "restored-random",
+              mode: "random",
+              allowedOpponentTypes: ["human"],
+              state: "queued",
+            },
+          },
+        }),
+      );
+    await establishAlice(fetchMock);
+    const wrapper = mountLobby();
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("Looking for another human player");
+    expect(wrapper.text()).toContain("Cancel search");
     wrapper.unmount();
   });
 

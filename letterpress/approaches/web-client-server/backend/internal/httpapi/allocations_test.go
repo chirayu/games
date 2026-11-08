@@ -33,6 +33,10 @@ func TestAllocationAPIIsIdempotentPrivateAndCancellable(t *testing.T) {
 	if retried.ID != created.ID {
 		t.Fatalf("retry allocation ID = %q, want %q", retried.ID, created.ID)
 	}
+	duplicate := createAllocationRequest(t, handler, aliceCookie, "challenge-new-key", "specified", bob.ID, http.StatusOK)
+	if duplicate.ID != created.ID {
+		t.Fatalf("duplicate challenge ID = %q, want %q", duplicate.ID, created.ID)
+	}
 	createAllocationRequest(t, handler, aliceCookie, "challenge-1", "random", "", http.StatusConflict)
 
 	if got := getAllocationRequest(t, handler, bobCookie, created.ID, http.StatusOK); got.ID != created.ID {
@@ -222,6 +226,9 @@ func TestRandomHumanMatchmakingQueuesMatchesAndAvoidsDuplicates(t *testing.T) {
 	if aliceQueue.State != "queued" || len(aliceQueue.AllowedOpponentTypes) != 1 || aliceQueue.AllowedOpponentTypes[0] != "human" {
 		t.Fatalf("Alice queue = %#v", aliceQueue)
 	}
+	if restored := lobbyAllocations(t, handler, aliceCookie).RandomAllocation; restored == nil || restored.ID != aliceQueue.ID {
+		t.Fatalf("restored random allocation = %#v", restored)
+	}
 	duplicate := createAllocationRequest(t, handler, aliceCookie, "alice-random-again", "random", "", http.StatusOK)
 	if duplicate.ID != aliceQueue.ID {
 		t.Fatalf("duplicate queue ID = %q, want %q", duplicate.ID, aliceQueue.ID)
@@ -368,6 +375,11 @@ func actionAllocationRequest(t *testing.T, handler http.Handler, cookie *http.Co
 
 func pendingChallenges(t *testing.T, handler http.Handler, cookie *http.Cookie) []app.ChallengeSummary {
 	t.Helper()
+	return lobbyAllocations(t, handler, cookie).Items
+}
+
+func lobbyAllocations(t *testing.T, handler http.Handler, cookie *http.Cookie) app.LobbyAllocations {
+	t.Helper()
 	request := httptest.NewRequest(http.MethodGet, testOrigin+"/api/v1/game-allocations", nil)
 	request.AddCookie(cookie)
 	response := httptest.NewRecorder()
@@ -376,12 +388,10 @@ func pendingChallenges(t *testing.T, handler http.Handler, cookie *http.Cookie) 
 		t.Fatalf("list challenges status = %d; body = %s", response.Code, response.Body.String())
 	}
 	var envelope struct {
-		Data struct {
-			Items []app.ChallengeSummary `json:"items"`
-		} `json:"data"`
+		Data app.LobbyAllocations `json:"data"`
 	}
 	decodeResponse(t, response, &envelope)
-	return envelope.Data.Items
+	return envelope.Data
 }
 
 func assertPendingChallenge(t *testing.T, handler http.Handler, cookie *http.Cookie, id, direction string) {

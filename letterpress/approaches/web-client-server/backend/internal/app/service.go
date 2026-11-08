@@ -45,6 +45,7 @@ type Store interface {
 	CancelGameAllocation(context.Context, string, string, time.Time) (sqlite.GameAllocation, error)
 	DeclineSpecifiedAllocation(context.Context, string, string, time.Time) (sqlite.GameAllocation, error)
 	ListPendingSpecifiedChallenges(context.Context, string, time.Time, int) ([]sqlite.SpecifiedChallenge, error)
+	GetQueuedRandomAllocation(context.Context, string, string, time.Time) (sqlite.GameAllocation, error)
 	MatchRandomAllocation(context.Context, string, sqlite.Game) (sqlite.GameAllocation, bool, error)
 	CompleteGameAllocation(context.Context, string, string, sqlite.Game, [2]sqlite.GameSeat) (sqlite.GameAllocation, error)
 	CreateGame(context.Context, sqlite.Game, [2]sqlite.GameSeat) error

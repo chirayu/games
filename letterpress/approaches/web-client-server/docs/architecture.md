@@ -160,7 +160,9 @@ Specified-player allocations expire seven days after creation. Expiry is
 applied lazily and atomically whenever an allocation is read, listed, cancelled,
 declined, or accepted, so an expired challenge cannot race into a game.
 `GET /api/v1/game-allocations` lists the authenticated player's live incoming
-and outgoing specified challenges. Only the intended opponent may `POST` to
+and outgoing specified challenges plus their queued random-human allocation,
+allowing the lobby to restore pending start state after reload. Only the
+intended opponent may `POST` to
 `/{id}/accept` or `/{id}/decline`; accepting creates exactly one game, while the
 requester may cancel with `DELETE /{id}` until another terminal transition wins.
 
@@ -175,6 +177,14 @@ allocations allocated with the shared game ID. A lone request remains persisted
 and cancellable. This durable queue survives restart and cannot silently replace
 a requested human with a bot. The lobby polls its allocation status while
 visible and navigates through the normal game route after a match.
+
+The lobby exposes one Start game flow with Specific player and Random player
+choices. The former reuses registered-player search; the latter uses the same
+durable random allocation after retries or reloads. A partial unique index also
+permits only one live specified challenge for a requester/opponent pair, so a
+retry with a new idempotency key returns the existing challenge. Allocated games
+recover through the participant-scoped active-game list. No frontend route or
+backend handler creates an invitation or exchanges a game-scoped credential.
 
 Completion runs in an immediate SQLite transaction. It locks and rechecks the
 allocation, creates the game and both seats, and attaches the game ID before

@@ -189,6 +189,39 @@ func (q *Queries) ExpireGameAllocation(ctx context.Context, arg ExpireGameAlloca
 	return result.RowsAffected()
 }
 
+const getEquivalentPendingSpecifiedAllocation = `-- name: GetEquivalentPendingSpecifiedAllocation :one
+SELECT id, requester_id, opponent_id, mode, allowed_opponent_type, state, idempotency_key, game_id, failure_reason, expires_at, created_at, updated_at FROM game_allocations
+WHERE requester_id = ? AND opponent_id = ?
+  AND mode = 'specified' AND state = 'pending_acceptance'
+ORDER BY created_at ASC, id ASC
+LIMIT 1
+`
+
+type GetEquivalentPendingSpecifiedAllocationParams struct {
+	RequesterID string         `json:"requester_id"`
+	OpponentID  sql.NullString `json:"opponent_id"`
+}
+
+func (q *Queries) GetEquivalentPendingSpecifiedAllocation(ctx context.Context, arg GetEquivalentPendingSpecifiedAllocationParams) (GameAllocation, error) {
+	row := q.db.QueryRowContext(ctx, getEquivalentPendingSpecifiedAllocation, arg.RequesterID, arg.OpponentID)
+	var i GameAllocation
+	err := row.Scan(
+		&i.ID,
+		&i.RequesterID,
+		&i.OpponentID,
+		&i.Mode,
+		&i.AllowedOpponentType,
+		&i.State,
+		&i.IdempotencyKey,
+		&i.GameID,
+		&i.FailureReason,
+		&i.ExpiresAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getEquivalentQueuedRandomAllocation = `-- name: GetEquivalentQueuedRandomAllocation :one
 SELECT id, requester_id, opponent_id, mode, allowed_opponent_type, state, idempotency_key, game_id, failure_reason, expires_at, created_at, updated_at FROM game_allocations
 WHERE requester_id = ? AND mode = 'random' AND allowed_opponent_type = ? AND state = 'queued'
@@ -256,6 +289,39 @@ type GetGameAllocationByRequesterKeyParams struct {
 
 func (q *Queries) GetGameAllocationByRequesterKey(ctx context.Context, arg GetGameAllocationByRequesterKeyParams) (GameAllocation, error) {
 	row := q.db.QueryRowContext(ctx, getGameAllocationByRequesterKey, arg.RequesterID, arg.IdempotencyKey)
+	var i GameAllocation
+	err := row.Scan(
+		&i.ID,
+		&i.RequesterID,
+		&i.OpponentID,
+		&i.Mode,
+		&i.AllowedOpponentType,
+		&i.State,
+		&i.IdempotencyKey,
+		&i.GameID,
+		&i.FailureReason,
+		&i.ExpiresAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getQueuedRandomAllocation = `-- name: GetQueuedRandomAllocation :one
+SELECT id, requester_id, opponent_id, mode, allowed_opponent_type, state, idempotency_key, game_id, failure_reason, expires_at, created_at, updated_at FROM game_allocations
+WHERE requester_id = ? AND mode = 'random'
+  AND allowed_opponent_type = ? AND state = 'queued'
+ORDER BY created_at ASC, id ASC
+LIMIT 1
+`
+
+type GetQueuedRandomAllocationParams struct {
+	RequesterID         string `json:"requester_id"`
+	AllowedOpponentType string `json:"allowed_opponent_type"`
+}
+
+func (q *Queries) GetQueuedRandomAllocation(ctx context.Context, arg GetQueuedRandomAllocationParams) (GameAllocation, error) {
+	row := q.db.QueryRowContext(ctx, getQueuedRandomAllocation, arg.RequesterID, arg.AllowedOpponentType)
 	var i GameAllocation
 	err := row.Scan(
 		&i.ID,

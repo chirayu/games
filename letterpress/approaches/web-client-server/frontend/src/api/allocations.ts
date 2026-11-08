@@ -27,6 +27,11 @@ export interface ChallengeSummary {
   createdAt: string;
 }
 
+export interface LobbyAllocations {
+  items: ChallengeSummary[];
+  randomAllocation?: GameAllocation;
+}
+
 export function createSpecifiedChallenge(
   opponentId: string,
 ): Promise<GameAllocation> {
@@ -61,12 +66,10 @@ export function getAllocation(id: string): Promise<GameAllocation> {
   );
 }
 
-export async function getPendingChallenges(): Promise<ChallengeSummary[]> {
-  const page = await request<{ items: ChallengeSummary[] }>(
-    "/api/v1/game-allocations",
-    { method: "GET" },
-  );
-  return page.items;
+export function getLobbyAllocations(): Promise<LobbyAllocations> {
+  return request<LobbyAllocations>("/api/v1/game-allocations", {
+    method: "GET",
+  });
 }
 
 export function acceptChallenge(id: string): Promise<GameAllocation> {

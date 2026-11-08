@@ -19,7 +19,7 @@ export default defineConfig({
   },
   webServer: [
     {
-      command: `cd ../backend && go run ./cmd/server -insecure-cookies -allowed-origin http://127.0.0.1:5173 -fixed-board CATDOGSUNMAPEXTRAORDINARY -db ${databasePath}`,
+      command: `cd ../backend && GOCACHE=/tmp/letterpress-e2e-go-cache go run ./cmd/server -insecure-cookies -allowed-origin http://127.0.0.1:5173 -fixed-board CATDOGSUNMAPEXTRAORDINARY -db ${databasePath}`,
       url: "http://127.0.0.1:8080/healthz",
       reuseExistingServer: false,
       timeout: 120_000,

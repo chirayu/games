@@ -301,13 +301,13 @@ func (handler *handler) getAllocation(response http.ResponseWriter, request *htt
 
 func (handler *handler) listPendingChallenges(response http.ResponseWriter, request *http.Request) {
 	response.Header().Set("Cache-Control", "no-store")
-	items, err := handler.service.ListPendingChallenges(
+	allocations, err := handler.service.GetLobbyAllocations(
 		request.Context(), handler.playerSessionToken(request),
 	)
 	if handler.writeAllocationError(response, err) {
 		return
 	}
-	writeJSON(response, http.StatusOK, map[string]any{"data": map[string]any{"items": items}})
+	writeJSON(response, http.StatusOK, map[string]any{"data": allocations})
 }
 
 func (handler *handler) acceptSpecifiedChallenge(response http.ResponseWriter, request *http.Request) {

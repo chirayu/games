@@ -45,3 +45,8 @@ ticket intentionally changes one.
     completion assigns the requester seat 1 and the resolved opponent seat 2 in
     the same transaction that creates the game. Public retries identify the
     original allocation with a requester-scoped idempotency key.
+12. **Unified start-game experience.** The authenticated lobby is the only
+    place to begin a game. Players explicitly choose a specific registered
+    player or random human matchmaking. Pending starts are restored from durable
+    allocations; there is no invitation link, transferable seat credential,
+    direct public game creation, or compatibility route.

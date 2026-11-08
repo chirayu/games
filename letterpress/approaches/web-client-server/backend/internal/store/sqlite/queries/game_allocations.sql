@@ -16,6 +16,20 @@ WHERE requester_id = ? AND mode = 'random' AND allowed_opponent_type = ? AND sta
 ORDER BY created_at ASC, id ASC
 LIMIT 1;
 
+-- name: GetEquivalentPendingSpecifiedAllocation :one
+SELECT * FROM game_allocations
+WHERE requester_id = ? AND opponent_id = ?
+  AND mode = 'specified' AND state = 'pending_acceptance'
+ORDER BY created_at ASC, id ASC
+LIMIT 1;
+
+-- name: GetQueuedRandomAllocation :one
+SELECT * FROM game_allocations
+WHERE requester_id = ? AND mode = 'random'
+  AND allowed_opponent_type = ? AND state = 'queued'
+ORDER BY created_at ASC, id ASC
+LIMIT 1;
+
 -- name: GetRandomMatchCandidate :one
 SELECT * FROM game_allocations
 WHERE mode = 'random'

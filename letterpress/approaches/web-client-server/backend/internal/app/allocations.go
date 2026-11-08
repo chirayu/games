@@ -48,6 +48,12 @@ type ChallengeSummary struct {
 	CreatedAt    time.Time    `json:"createdAt"`
 }
 
+// LobbyAllocations contains every pending allocation needed to restore start-game UI.
+type LobbyAllocations struct {
+	Items            []ChallengeSummary `json:"items"`
+	RandomAllocation *GameAllocation    `json:"randomAllocation,omitempty"`
+}
+
 // CreateAllocation creates an idempotent durable request for the authenticated player.
 func (service *Service) CreateAllocation(
 	ctx context.Context,
@@ -262,6 +268,27 @@ func (service *Service) ListPendingChallenges(ctx context.Context, token string)
 		})
 	}
 	return items, nil
+}
+
+// GetLobbyAllocations restores pending specified challenges and a queued random search.
+func (service *Service) GetLobbyAllocations(ctx context.Context, token string) (LobbyAllocations, error) {
+	player, err := service.CurrentPlayer(ctx, token)
+	if err != nil {
+		return LobbyAllocations{}, err
+	}
+	items, err := service.ListPendingChallenges(ctx, token)
+	if err != nil {
+		return LobbyAllocations{}, err
+	}
+	result := LobbyAllocations{Items: items}
+	random, err := service.store.GetQueuedRandomAllocation(ctx, player.ID, "human", service.now().UTC())
+	if err == nil {
+		view := allocationView(random)
+		result.RandomAllocation = &view
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return LobbyAllocations{}, fmt.Errorf("load queued random allocation: %w", err)
+	}
+	return result, nil
 }
 
 // CompleteAllocation atomically creates one game with requester in seat one and opponent in seat two.
