@@ -83,6 +83,12 @@ clears its cookie, so logging out one browser does not affect another browser
 logged in with the same name. State-changing session requests require a
 matching browser origin.
 
+The Vue router restores this session before entering protected routes. Visitors
+without a valid session see name entry; authenticated players go directly to
+the lobby. The lobby header always identifies the current player and provides
+logout. Network, validation, and expired-session states remain recoverable, and
+the UI explicitly warns that knowing a name is sufficient to use that identity.
+
 ## Registered game membership
 
 Each game has exactly two `game_seats`. A seat links its numbered game role to

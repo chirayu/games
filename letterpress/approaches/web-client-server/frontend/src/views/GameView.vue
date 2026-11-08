@@ -281,10 +281,12 @@ async function submitSelection() {
       class="state-card"
       aria-labelledby="unauthorized-title"
     >
-      <p class="eyebrow">Private game</p>
-      <h1 id="unauthorized-title">This seat isn’t available here.</h1>
-      <p>Open your private invitation link on this device to restore access.</p>
-      <RouterLink class="text-link" to="/">Return home</RouterLink>
+      <p class="eyebrow">Game access</p>
+      <h1 id="unauthorized-title">This game isn’t in your lobby.</h1>
+      <p>Sign in as a player assigned to this game, then try again.</p>
+      <RouterLink class="text-link" to="/lobby"
+        >Return to your games</RouterLink
+      >
     </section>
 
     <section
@@ -294,8 +296,10 @@ async function submitSelection() {
     >
       <p class="eyebrow">Game not found</p>
       <h1 id="missing-title">That board doesn’t exist.</h1>
-      <p>Check the address or ask the other player to resend the invitation.</p>
-      <RouterLink class="text-link" to="/">Return home</RouterLink>
+      <p>Check the address or return to your active games.</p>
+      <RouterLink class="text-link" to="/lobby"
+        >Return to your games</RouterLink
+      >
     </section>
 
     <section

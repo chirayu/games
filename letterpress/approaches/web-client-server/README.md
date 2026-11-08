@@ -42,7 +42,9 @@ player. There is deliberately no password or ownership verification yet, so
 anyone who knows a player name can access that identity. Each browser receives
 an independent secure session and can log out without affecting other sessions.
 
-Game seats reference registered players directly. The old invitation tokens,
+The UI registers or logs in a player by name, restores their session on reload,
+and provides application-wide logout. Game seats reference registered players
+directly. The old invitation tokens,
 game-scoped cookies, and public creation/session-exchange endpoints have been
 removed; the migration intentionally purges invitation-era games. The game
 allocation REST API and new player-facing UI are tracked separately.
@@ -138,7 +140,7 @@ use cryptographically secure random letters.
 ## Development status
 
 The pure Go game engine, SQLite persistence layer, name-only registered-player
-sessions, registered game membership, authenticated responsive board,
+sessions and UI, registered game membership, authenticated responsive board,
 transactional move submission,
 multi-day focus/visibility refresh and polling, recoverable local move drafts,
 server-authoritative English dictionary validation, final results and move

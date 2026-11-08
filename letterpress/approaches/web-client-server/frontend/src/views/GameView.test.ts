@@ -236,7 +236,7 @@ describe("GameView", () => {
   });
 
   it.each([
-    { status: 401, heading: "This seat isn’t available here." },
+    { status: 401, heading: "This game isn’t in your lobby." },
     { status: 404, heading: "That board doesn’t exist." },
   ])("shows the $status state", async ({ status, heading }) => {
     api.getGame.mockRejectedValue({ status });

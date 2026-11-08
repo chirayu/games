@@ -1,32 +1,38 @@
 import { createRouter, createWebHistory } from "vue-router";
 
+import { restorePlayerSession } from "../composables/playerSession";
 import HomeView from "../views/HomeView.vue";
-import CreateGameView from "../views/CreateGameView.vue";
 import GameView from "../views/GameView.vue";
-import JoinGameView from "../views/JoinGameView.vue";
+import LobbyView from "../views/LobbyView.vue";
 
-export default createRouter({
+const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
     {
       path: "/",
       name: "home",
       component: HomeView,
+      meta: { guestOnly: true },
     },
     {
-      path: "/games/new",
-      name: "create-game",
-      component: CreateGameView,
-    },
-    {
-      path: "/games/:gameId/join",
-      name: "join-game",
-      component: JoinGameView,
+      path: "/lobby",
+      name: "lobby",
+      component: LobbyView,
+      meta: { requiresAuth: true },
     },
     {
       path: "/games/:gameId",
       name: "game",
       component: GameView,
+      meta: { requiresAuth: true },
     },
   ],
 });
+
+router.beforeEach(async (to) => {
+  const player = await restorePlayerSession();
+  if (to.meta.requiresAuth && !player) return { name: "home" };
+  if (to.meta.guestOnly && player) return { name: "lobby" };
+});
+
+export default router;
