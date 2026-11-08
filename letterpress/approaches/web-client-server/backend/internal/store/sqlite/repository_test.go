@@ -2,7 +2,6 @@ package sqlite
 
 import (
 	"context"
-	"crypto/sha256"
 	"errors"
 	"path/filepath"
 	"reflect"
@@ -44,7 +43,7 @@ func TestOpenCreatesDatabaseFromMigrationsAndConfiguresPragmas(t *testing.T) {
 
 func TestCreateAndRetrieveGameAndPlayers(t *testing.T) {
 	repository := openTestRepository(t, filepath.Join(t.TempDir(), "letterpress.db"))
-	game, players := testGame()
+	game, players := testGame(t, repository)
 
 	if err := repository.CreateGame(context.Background(), game, players); err != nil {
 		t.Fatalf("create game: %v", err)
@@ -58,7 +57,7 @@ func TestCreateAndRetrieveGameAndPlayers(t *testing.T) {
 		t.Fatalf("stored game = %#v, want %#v", storedGame, game)
 	}
 
-	storedPlayers, err := repository.ListPlayers(context.Background(), game.ID)
+	storedPlayers, err := repository.ListGameSeats(context.Background(), game.ID)
 	if err != nil {
 		t.Fatalf("list players: %v", err)
 	}
@@ -66,7 +65,7 @@ func TestCreateAndRetrieveGameAndPlayers(t *testing.T) {
 		t.Fatalf("stored players = %#v, want %#v", storedPlayers, players)
 	}
 
-	player, err := repository.GetPlayerByTokenHash(context.Background(), game.ID, players[1].TokenHash)
+	player, err := repository.GetGameSeatByPlayer(context.Background(), game.ID, players[1].PlayerID)
 	if err != nil {
 		t.Fatalf("get player by token hash: %v", err)
 	}
@@ -78,7 +77,7 @@ func TestCreateAndRetrieveGameAndPlayers(t *testing.T) {
 func TestMoveAndStatePersistAcrossRepositoryRestart(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "letterpress.db")
 	repository := openTestRepository(t, path)
-	game, players := testGame()
+	game, players := testGame(t, repository)
 	if err := repository.CreateGame(context.Background(), game, players); err != nil {
 		t.Fatalf("create game: %v", err)
 	}
@@ -122,7 +121,7 @@ func TestMoveAndStatePersistAcrossRepositoryRestart(t *testing.T) {
 
 func TestApplyMoveIsAtomicAndRejectsStaleConcurrentWrites(t *testing.T) {
 	repository := openTestRepository(t, filepath.Join(t.TempDir(), "letterpress.db"))
-	game, players := testGame()
+	game, players := testGame(t, repository)
 	if err := repository.CreateGame(context.Background(), game, players); err != nil {
 		t.Fatalf("create game: %v", err)
 	}
@@ -194,6 +193,32 @@ func TestApplyMoveIsAtomicAndRejectsStaleConcurrentWrites(t *testing.T) {
 	}
 }
 
+func TestTransactMoveRequiresRegisteredGameMembership(t *testing.T) {
+	repository := openTestRepository(t, filepath.Join(t.TempDir(), "letterpress.db"))
+	game, seats := testGame(t, repository)
+	if err := repository.CreateGame(context.Background(), game, seats); err != nil {
+		t.Fatalf("create game: %v", err)
+	}
+
+	called := false
+	err := repository.TransactMove(context.Background(), game.ID, "not-a-member", 0, func(Game, GameSeat, []Move) (Move, GameState, error) {
+		called = true
+		return Move{}, GameState{}, nil
+	})
+	if !errors.Is(err, ErrPlayerNotFound) || called {
+		t.Fatalf("non-member transaction = %v, called %t; want ErrPlayerNotFound without operation", err, called)
+	}
+	err = repository.TransactMove(context.Background(), "missing-game", seats[0].PlayerID, 0, func(Game, GameSeat, []Move) (Move, GameState, error) {
+		called = true
+		return Move{}, GameState{}, nil
+	})
+	if !errors.Is(err, ErrPlayerNotFound) || called {
+		t.Fatalf("missing-game transaction = %v, called %t; want indistinguishable membership failure", err, called)
+	}
+	assertGameVersionAndOwners(t, repository, game.ID, 0, game.TileOwners)
+	assertMoveCount(t, repository, game.ID, 0)
+}
+
 func openTestRepository(t *testing.T, path string) *Repository {
 	t.Helper()
 	repository, err := Open(context.Background(), path)
@@ -204,15 +229,27 @@ func openTestRepository(t *testing.T, path string) *Repository {
 	return repository
 }
 
-func testGame() (Game, [2]Player) {
+func testGame(t *testing.T, repository *Repository) (Game, [2]GameSeat) {
+	t.Helper()
 	createdAt := time.Date(2026, time.October, 31, 6, 0, 0, 0, time.UTC)
+	for index, player := range []RegisteredPlayer{
+		{ID: "player-one", DisplayName: "Player One", NormalizedName: "player one", CreatedAt: createdAt},
+		{ID: "player-two", DisplayName: "Player Two", NormalizedName: "player two", CreatedAt: createdAt},
+	} {
+		hash := [32]byte{byte(index + 1)}
+		if _, _, err := repository.CreateRegisteredPlayerSession(context.Background(), player, PlayerSession{
+			TokenHash: hash, PlayerID: player.ID, CreatedAt: createdAt, ExpiresAt: createdAt.Add(time.Hour),
+		}); err != nil {
+			t.Fatalf("create registered player %q: %v", player.ID, err)
+		}
+	}
 	game := Game{
 		ID: "game-1", BoardLetters: []byte("ABCDEFGHIJKLMNOPQRSTUVWXYZ"[:25]), TileOwners: make([]byte, 25),
 		CurrentPlayer: 1, Status: "active", Version: 0, CreatedAt: createdAt, UpdatedAt: createdAt,
 	}
-	return game, [2]Player{
-		{GameID: game.ID, Seat: 1, TokenHash: sha256.Sum256([]byte("player-one-secret")), CreatedAt: createdAt},
-		{GameID: game.ID, Seat: 2, TokenHash: sha256.Sum256([]byte("player-two-secret")), CreatedAt: createdAt},
+	return game, [2]GameSeat{
+		{GameID: game.ID, Seat: 1, PlayerID: "player-one", CreatedAt: createdAt},
+		{GameID: game.ID, Seat: 2, PlayerID: "player-two", CreatedAt: createdAt},
 	}
 }
 

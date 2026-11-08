@@ -30,14 +30,13 @@ ticket intentionally changes one.
    an independent application-wide secure cookie backed by a stored token hash;
    logout revokes only that session. Anyone who knows a name can impersonate
    that player, an accepted limitation for the current private deployment.
-   Legacy invitation capabilities coexist only during the staged migration to
-   registered game seats and are not the target identity model.
+   Game seats reference registered-player IDs and contain no independent
+   credential. Invitation capabilities are removed rather than retained for
+   compatibility, and the migration purges invitation-era games.
 8. **Asynchronous refresh.** Fetch on load and focus; poll every 30 seconds only
    while visible and waiting. Version checks resolve stale clients.
 9. **Retention.** Keep games indefinitely for the MVP and use 180-day
    registered-player sessions. Each browser login is independently revocable.
-   Legacy game cookies retain their existing lifetime only until invitation
-   authentication is removed.
 10. **Deployment target.** Produce a provider-neutral OCI container, durable
     SQLite volume guidance, and GitHub Actions validation. Selecting and
     provisioning a hosting provider is a later decision.

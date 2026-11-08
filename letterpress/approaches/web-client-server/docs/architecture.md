@@ -46,7 +46,7 @@ the move, records it, and updates game state. A stale version returns a conflict
 without changing state.
 
 The move repository starts an immediate write transaction before loading the
-game, capability, and ordered move history. The application reconstructs the
+registered-player seat, game, and ordered move history. The application reconstructs the
 pure domain game inside that transaction, derives the word from stored letters,
 and returns the accepted move and resulting state for one atomic write. This
 serializes competing writers so a double submission produces one accepted turn
@@ -83,43 +83,34 @@ clears its cookie, so logging out one browser does not affect another browser
 logged in with the same name. State-changing session requests require a
 matching browser origin.
 
-Registered-player identity is being introduced before game membership changes.
-Until the following migration replaces game seats, the existing game endpoints
-continue to use the legacy invitation capabilities described below. The two
-credential types are stored separately and a registered-player session does
-not grant access to a legacy game.
+## Registered game membership
 
-## Legacy invitations and game sessions
+Each game has exactly two `game_seats`. A seat links its numbered game role to
+a durable registered-player ID; it contains no credential. Game allocation is
+the only intended creator of games and assigns two distinct registered players
+when it calls the application service. Its public REST API is introduced by a
+later ticket, so there is currently no public game-creation endpoint.
 
-Game creation generates separate 32-byte random secrets for the two player
-seats. Only SHA-256 hashes of those secrets are stored. Each invitation places
-the raw secret in the URL fragment so it is not sent in ordinary HTTP requests.
-The frontend exchanges it at `POST /api/v1/games/{gameID}/sessions`, then removes
-the fragment from the visible URL.
+The migration from invitation capabilities is deliberately destructive. It
+purges all invitation-era games and move history, drops the legacy `players`
+table, and replaces it with registered `game_seats`. The legacy creation and
+session-exchange routes are absent and old credentials cannot authorize or
+reveal a game.
 
-The exchange sets an `HttpOnly`, `Secure`, `SameSite=Lax` cookie whose name and
-path are scoped to the game. This supports multiple concurrent games without
-accounts. Mutating requests verify the request origin. The cookie lasts 180
-days and may be re-established by reopening the private invitation link.
+For the MVP, newly allocated games do not expire automatically. Retention and
+deletion controls can be added when operating requirements are known. API
+successes use a `data` envelope and failures use an `error` envelope with
+stable `code` and `message` fields. State-changing endpoints require a matching
+browser origin.
 
-For the MVP, games do not expire automatically. Retention and deletion controls
-can be added when operating requirements are known.
-
-`POST /api/v1/games` creates the authoritative 5×5 game and returns the two raw
-capabilities once; the client immediately exchanges Player 1's capability and
-places Player 2's capability only in the invitation URL fragment. Session
-exchange returns the authenticated seat, never the capability. API successes
-use a `data` envelope and failures use an `error` envelope with stable `code`
-and `message` fields. All state-changing endpoints require a matching browser
-origin. Secure cookies are the default, with an explicit insecure override for
-local HTTP development.
-
-`GET /api/v1/games/{gameID}` authenticates the game-scoped cookie and returns
-the current persisted board plus the requesting player's seat. Scores and
+`GET /api/v1/games/{gameID}` authenticates the application-wide player session,
+requires that registered player to hold a game seat, and returns the current
+persisted board plus the requesting player's seat. Scores and
 protection are derived by the domain package from tile ownership on every read,
 so clients receive a deterministic view without duplicating game rules. Game
-responses are marked `no-store`; a missing or invalid session is unauthorized,
-while an unknown game has a distinct not-found response.
+responses are marked `no-store`. A missing or invalid session, a non-member,
+and an unknown game for which the player has no seat all return unauthorized,
+so membership checks do not disclose game existence.
 
 `POST /api/v1/games/{gameID}/moves` accepts ordered tile indexes and an expected
 version, never a client-provided word. Successful responses contain the updated
@@ -141,8 +132,7 @@ unsubmitted move is saved in browser-local storage with the game ID and version
 so a transient network error or browser restart does not discard it. The draft
 is removed after success and discarded with an explanation if the server
 version changes. Games have no automatic expiry in the MVP. Registered-player
-sessions and the legacy game-scoped cookies last 180 days; only the registered
-player session supports name-based login from another browser.
+sessions last 180 days and authorize every game in which the player has a seat.
 
 ## Production shape
 
@@ -156,7 +146,7 @@ graceful shutdown; `/healthz` reports liveness and `/readyz` checks SQLite.
 The container runs one non-root application process and expects one writable
 `/data` volume. Startup applies embedded migrations before listening. Request
 logs include method, path, status, response bytes, and duration but omit query
-strings, headers, cookies, and bodies so player capabilities are not exposed.
+strings, headers, cookies, and bodies so player session credentials are not exposed.
 The deployment runbook defines backup, restore, migration, and rollback
 procedures. Deploying to a particular hosting provider remains out of scope.
 
@@ -164,8 +154,7 @@ procedures. Deploying to a particular hosting provider remains out of scope.
 
 The Playwright suite starts an isolated local service with the explicit
 development-only `-fixed-board` option and uses separate browser contexts for
-the two player cookies. Production startup omits that option and retains secure
-random generation. The critical journey covers invitation exchange, shared
-state, alternating moves, session resume, stale-version recovery, and the same
-final result in both clients. Traces, screenshots, and video are retained for
-failed runs.
+registered players. Production startup omits that option and retains secure
+random generation. The browser journey will move to registration and allocation
+as those UI tickets land. Traces, screenshots, and video are retained for failed
+runs.

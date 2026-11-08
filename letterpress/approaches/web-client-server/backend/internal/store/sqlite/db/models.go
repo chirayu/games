@@ -19,6 +19,13 @@ type Game struct {
 	UpdatedAt     time.Time `json:"updated_at"`
 }
 
+type GameSeat struct {
+	GameID    string    `json:"game_id"`
+	Seat      int64     `json:"seat"`
+	PlayerID  string    `json:"player_id"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
 type Move struct {
 	ID          int64     `json:"id"`
 	GameID      string    `json:"game_id"`
@@ -27,13 +34,6 @@ type Move struct {
 	TileIndexes string    `json:"tile_indexes"`
 	Word        string    `json:"word"`
 	CreatedAt   time.Time `json:"created_at"`
-}
-
-type Player struct {
-	GameID    string    `json:"game_id"`
-	Seat      int64     `json:"seat"`
-	TokenHash []byte    `json:"token_hash"`
-	CreatedAt time.Time `json:"created_at"`
 }
 
 type PlayerSession struct {

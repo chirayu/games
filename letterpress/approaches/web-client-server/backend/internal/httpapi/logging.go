@@ -7,7 +7,7 @@ import (
 )
 
 // LogRequests emits one structured completion record without headers, cookies,
-// query parameters, or request bodies that may contain player capabilities.
+// query parameters, or request bodies that may contain player credentials.
 func LogRequests(next http.Handler, logger *slog.Logger) http.Handler {
 	if logger == nil {
 		return next

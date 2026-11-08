@@ -25,7 +25,7 @@ var (
 	ErrVersionConflict = errors.New("game version conflict")
 	// ErrGameNotFound indicates that a transactional operation has no game row.
 	ErrGameNotFound = errors.New("game not found")
-	// ErrPlayerNotFound indicates that a capability does not match a player seat.
+	// ErrPlayerNotFound indicates that a registered player has no seat in a game.
 	ErrPlayerNotFound = errors.New("player not found")
 )
 
@@ -41,11 +41,11 @@ type Game struct {
 	UpdatedAt     time.Time
 }
 
-// Player is one seat in a game. TokenHash is the only credential persisted.
-type Player struct {
+// GameSeat assigns one registered player to one numbered seat in a game.
+type GameSeat struct {
 	GameID    string
 	Seat      int64
-	TokenHash [32]byte
+	PlayerID  string
 	CreatedAt time.Time
 }
 
@@ -87,7 +87,7 @@ type GameState struct {
 
 // MoveOperation validates a move from the state read inside its write
 // transaction and returns the accepted move and resulting state.
-type MoveOperation func(Game, Player, []Move) (Move, GameState, error)
+type MoveOperation func(Game, GameSeat, []Move) (Move, GameState, error)
 
 // Repository owns a SQLite connection pool and generated queries.
 type Repository struct {
@@ -220,8 +220,8 @@ func (repository *Repository) DeletePlayerSession(ctx context.Context, tokenHash
 	return nil
 }
 
-// CreateGame atomically creates a game and both player seats.
-func (repository *Repository) CreateGame(ctx context.Context, game Game, players [2]Player) error {
+// CreateGame atomically creates a game and both registered-player seats.
+func (repository *Repository) CreateGame(ctx context.Context, game Game, seats [2]GameSeat) error {
 	transaction, err := repository.database.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin create game transaction: %w", err)
@@ -242,17 +242,17 @@ func (repository *Repository) CreateGame(ctx context.Context, game Game, players
 		return fmt.Errorf("create game: %w", err)
 	}
 
-	for index, player := range players {
-		if player.GameID != game.ID {
-			return fmt.Errorf("player %d belongs to game %q, want %q", index+1, player.GameID, game.ID)
+	for index, seat := range seats {
+		if seat.GameID != game.ID {
+			return fmt.Errorf("seat %d belongs to game %q, want %q", index+1, seat.GameID, game.ID)
 		}
-		if err := queries.CreatePlayer(ctx, generated.CreatePlayerParams{
-			GameID:    player.GameID,
-			Seat:      player.Seat,
-			TokenHash: player.TokenHash[:],
-			CreatedAt: player.CreatedAt,
+		if err := queries.CreateGameSeat(ctx, generated.CreateGameSeatParams{
+			GameID:    seat.GameID,
+			Seat:      seat.Seat,
+			PlayerID:  seat.PlayerID,
+			CreatedAt: seat.CreatedAt,
 		}); err != nil {
-			return fmt.Errorf("create player %d: %w", player.Seat, err)
+			return fmt.Errorf("create game seat %d: %w", seat.Seat, err)
 		}
 	}
 
@@ -280,37 +280,31 @@ func (repository *Repository) GetGame(ctx context.Context, id string) (Game, err
 	}, nil
 }
 
-// ListPlayers retrieves both seats in stable seat order.
-func (repository *Repository) ListPlayers(ctx context.Context, gameID string) ([]Player, error) {
-	rows, err := repository.queries.ListPlayers(ctx, gameID)
+// ListGameSeats retrieves both registered memberships in stable seat order.
+func (repository *Repository) ListGameSeats(ctx context.Context, gameID string) ([]GameSeat, error) {
+	rows, err := repository.queries.ListGameSeats(ctx, gameID)
 	if err != nil {
-		return nil, fmt.Errorf("list players: %w", err)
+		return nil, fmt.Errorf("list game seats: %w", err)
 	}
-	players := make([]Player, 0, len(rows))
+	seats := make([]GameSeat, 0, len(rows))
 	for _, row := range rows {
-		var tokenHash [32]byte
-		copy(tokenHash[:], row.TokenHash)
-		players = append(players, Player{
-			GameID:    row.GameID,
-			Seat:      row.Seat,
-			TokenHash: tokenHash,
-			CreatedAt: row.CreatedAt,
+		seats = append(seats, GameSeat{
+			GameID: row.GameID, Seat: row.Seat,
+			PlayerID: row.PlayerID, CreatedAt: row.CreatedAt,
 		})
 	}
-	return players, nil
+	return seats, nil
 }
 
-// GetPlayerByTokenHash finds a seat by its already-hashed access token.
-func (repository *Repository) GetPlayerByTokenHash(ctx context.Context, gameID string, tokenHash [32]byte) (Player, error) {
-	row, err := repository.queries.GetPlayerByTokenHash(ctx, generated.GetPlayerByTokenHashParams{
-		GameID: gameID, TokenHash: tokenHash[:],
+// GetGameSeatByPlayer finds a registered player's seat in one game.
+func (repository *Repository) GetGameSeatByPlayer(ctx context.Context, gameID, playerID string) (GameSeat, error) {
+	row, err := repository.queries.GetGameSeatByPlayer(ctx, generated.GetGameSeatByPlayerParams{
+		GameID: gameID, PlayerID: playerID,
 	})
 	if err != nil {
-		return Player{}, fmt.Errorf("get player by token hash: %w", err)
+		return GameSeat{}, fmt.Errorf("get game seat by player: %w", err)
 	}
-	var storedHash [32]byte
-	copy(storedHash[:], row.TokenHash)
-	return Player{GameID: row.GameID, Seat: row.Seat, TokenHash: storedHash, CreatedAt: row.CreatedAt}, nil
+	return GameSeat{GameID: row.GameID, Seat: row.Seat, PlayerID: row.PlayerID, CreatedAt: row.CreatedAt}, nil
 }
 
 // ApplyMove atomically records a move and its resulting state. The update only
@@ -374,7 +368,7 @@ func (repository *Repository) ApplyMove(
 func (repository *Repository) TransactMove(
 	ctx context.Context,
 	gameID string,
-	tokenHash [32]byte,
+	playerID string,
 	expectedVersion int64,
 	operation MoveOperation,
 ) error {
@@ -389,6 +383,15 @@ func (repository *Repository) TransactMove(
 	defer func() { _, _ = connection.ExecContext(context.Background(), "ROLLBACK") }()
 	queries := generated.New(connection)
 
+	seatRow, err := queries.GetGameSeatByPlayer(ctx, generated.GetGameSeatByPlayerParams{
+		GameID: gameID, PlayerID: playerID,
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrPlayerNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("authorize move player: %w", err)
+	}
 	gameRow, err := queries.GetGame(ctx, gameID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrGameNotFound
@@ -398,15 +401,6 @@ func (repository *Repository) TransactMove(
 	}
 	if gameRow.Version != expectedVersion {
 		return ErrVersionConflict
-	}
-	playerRow, err := queries.GetPlayerByTokenHash(ctx, generated.GetPlayerByTokenHashParams{
-		GameID: gameID, TokenHash: tokenHash[:],
-	})
-	if errors.Is(err, sql.ErrNoRows) {
-		return ErrPlayerNotFound
-	}
-	if err != nil {
-		return fmt.Errorf("authenticate move player: %w", err)
 	}
 	moveRows, err := queries.ListMoves(ctx, gameID)
 	if err != nil {
@@ -429,14 +423,15 @@ func (repository *Repository) TransactMove(
 		CurrentPlayer: gameRow.CurrentPlayer, Status: gameRow.Status, Version: gameRow.Version,
 		CreatedAt: gameRow.CreatedAt, UpdatedAt: gameRow.UpdatedAt,
 	}
-	var token [32]byte
-	copy(token[:], playerRow.TokenHash)
-	player := Player{GameID: playerRow.GameID, Seat: playerRow.Seat, TokenHash: token, CreatedAt: playerRow.CreatedAt}
-	move, state, err := operation(storedGame, player, moves)
+	seat := GameSeat{
+		GameID: seatRow.GameID, Seat: seatRow.Seat,
+		PlayerID: seatRow.PlayerID, CreatedAt: seatRow.CreatedAt,
+	}
+	move, state, err := operation(storedGame, seat, moves)
 	if err != nil {
 		return err
 	}
-	if move.GameID != gameID || move.Player != player.Seat || move.TurnNumber != int64(len(moves)+1) {
+	if move.GameID != gameID || move.Player != seat.Seat || move.TurnNumber != int64(len(moves)+1) {
 		return errors.New("move operation returned inconsistent identity or turn")
 	}
 	tileIndexes, err := json.Marshal(move.TileIndexes)

@@ -3,8 +3,6 @@ package httpapi
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -13,6 +11,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -109,12 +108,9 @@ func TestFrontendAssetsAndSPAFallbackShareTheAPIOrigin(t *testing.T) {
 	}
 }
 
-func TestCreateGameAndExchangeDistinctPlayerSessions(t *testing.T) {
+func TestAssignedGamePersistsRegisteredPlayerSeats(t *testing.T) {
 	handler, repository, now := newIntegrationHandler(t, true)
 	created := createGame(t, handler)
-	if created.PlayerOneToken == created.PlayerTwoToken {
-		t.Fatal("player invitation tokens are identical")
-	}
 	game, err := repository.GetGame(context.Background(), created.GameID)
 	if err != nil {
 		t.Fatalf("get created game: %v", err)
@@ -122,88 +118,29 @@ func TestCreateGameAndExchangeDistinctPlayerSessions(t *testing.T) {
 	if len(game.BoardLetters) != 25 || len(game.TileOwners) != 25 || game.CurrentPlayer != 1 || game.Status != "active" {
 		t.Fatalf("created game = %#v, want a fresh 5x5 active game", game)
 	}
-	players, err := repository.ListPlayers(context.Background(), created.GameID)
+	players, err := repository.ListGameSeats(context.Background(), created.GameID)
 	if err != nil {
 		t.Fatalf("list created players: %v", err)
 	}
 	if len(players) != 2 || players[0].Seat != 1 || players[1].Seat != 2 {
 		t.Fatalf("players = %#v, want seats 1 and 2", players)
 	}
-	assertStoredHash(t, created.PlayerOneToken, players[0].TokenHash)
-	assertStoredHash(t, created.PlayerTwoToken, players[1].TokenHash)
-
-	for _, test := range []struct {
-		name  string
-		token string
-		seat  int64
-	}{
-		{name: "player one", token: created.PlayerOneToken, seat: 1},
-		{name: "player two", token: created.PlayerTwoToken, seat: 2},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			response := exchangeSession(t, handler, created.GameID, test.token)
-			if response.Code != http.StatusOK {
-				t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
-			}
-			if response.Header().Get("Cache-Control") != "no-store" {
-				t.Fatalf("Cache-Control = %q, want no-store", response.Header().Get("Cache-Control"))
-			}
-			var body struct {
-				Data struct {
-					GameID string `json:"gameId"`
-					Seat   int64  `json:"seat"`
-				} `json:"data"`
-			}
-			decodeResponse(t, response, &body)
-			if body.Data.GameID != created.GameID || body.Data.Seat != test.seat {
-				t.Fatalf("session = %#v, want game %q seat %d", body.Data, created.GameID, test.seat)
-			}
-
-			cookies := response.Result().Cookies()
-			if len(cookies) != 1 {
-				t.Fatalf("cookies = %d, want 1", len(cookies))
-			}
-			cookie := cookies[0]
-			if cookie.Name != sessionCookieName(created.GameID) || cookie.Value != test.token {
-				t.Fatalf("session cookie name/value = %q/%q", cookie.Name, cookie.Value)
-			}
-			if cookie.Path != gameAPIPath(created.GameID) || !cookie.HttpOnly || !cookie.Secure || cookie.SameSite != http.SameSiteLaxMode {
-				t.Fatalf("session cookie attributes = %#v", cookie)
-			}
-			if cookie.MaxAge != int(sessionLifetime.Seconds()) || !cookie.Expires.Equal(now.Add(sessionLifetime)) {
-				t.Fatalf("session cookie lifetime = %d/%s", cookie.MaxAge, cookie.Expires)
-			}
-		})
+	if players[0].PlayerID != created.PlayerOne.ID || players[1].PlayerID != created.PlayerTwo.ID {
+		t.Fatalf("seat players = %#v, want %q/%q", players, created.PlayerOne.ID, created.PlayerTwo.ID)
+	}
+	if !created.PlayerOneCookie.Expires.Equal(now.Add(sessionLifetime)) || !created.PlayerTwoCookie.Expires.Equal(now.Add(sessionLifetime)) {
+		t.Fatal("player session lifetime changed while assigning a game")
 	}
 }
 
-func TestSessionRejectsModifiedAndCrossGameSecrets(t *testing.T) {
+func TestLegacyCreationAndInvitationRoutesAreUnavailable(t *testing.T) {
 	handler, _, _ := newIntegrationHandler(t, false)
-	first := createGame(t, handler)
-	second := createGame(t, handler)
-
-	modified := first.PlayerOneToken
-	if modified[0] == 'A' {
-		modified = "B" + modified[1:]
-	} else {
-		modified = "A" + modified[1:]
-	}
-	for _, test := range []struct {
-		name   string
-		gameID string
-		token  string
-	}{
-		{name: "modified", gameID: first.GameID, token: modified},
-		{name: "other game", gameID: second.GameID, token: first.PlayerOneToken},
-		{name: "malformed", gameID: first.GameID, token: "not-a-secret"},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			response := exchangeSession(t, handler, test.gameID, test.token)
-			assertAPIError(t, response, http.StatusUnauthorized, "invalid_invitation")
-			if len(response.Result().Cookies()) != 0 {
-				t.Fatal("rejected invitation set a cookie")
-			}
-		})
+	for _, target := range []string{"/api/v1/games", "/api/v1/games/unknown/sessions"} {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, newMutationRequest(http.MethodPost, target, strings.NewReader(`{}`)))
+		if response.Code != http.StatusNotFound {
+			t.Fatalf("POST %s = %d, want 404", target, response.Code)
+		}
 	}
 }
 
@@ -228,8 +165,8 @@ func TestGetGameReturnsSharedBoardWithPlayerPerspective(t *testing.T) {
 		t.Fatalf("seed game state: %v", err)
 	}
 
-	playerOne := loadGame(t, handler, created.GameID, sessionCookie(t, handler, created.GameID, created.PlayerOneToken))
-	playerTwo := loadGame(t, handler, created.GameID, sessionCookie(t, handler, created.GameID, created.PlayerTwoToken))
+	playerOne := loadGame(t, handler, created.GameID, created.PlayerOneCookie)
+	playerTwo := loadGame(t, handler, created.GameID, created.PlayerTwoCookie)
 	if playerOne.PlayerSeat != 1 || playerTwo.PlayerSeat != 2 {
 		t.Fatalf("player seats = %d/%d, want 1/2", playerOne.PlayerSeat, playerTwo.PlayerSeat)
 	}
@@ -262,24 +199,24 @@ func TestGetGameReportsUnauthorizedAndMissingStates(t *testing.T) {
 	assertAPIError(t, response, http.StatusUnauthorized, "unauthorized")
 
 	request = httptest.NewRequest(http.MethodGet, testOrigin+"/api/v1/games/"+created.GameID, nil)
-	request.AddCookie(&http.Cookie{Name: sessionCookieName(created.GameID), Value: "invalid"})
+	request.AddCookie(&http.Cookie{Name: playerSessionCookieName, Value: "invalid"})
 	response = httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	assertAPIError(t, response, http.StatusUnauthorized, "unauthorized")
 
 	missingID := "missing-game"
 	request = httptest.NewRequest(http.MethodGet, testOrigin+"/api/v1/games/"+missingID, nil)
-	request.AddCookie(&http.Cookie{Name: sessionCookieName(missingID), Value: created.PlayerOneToken})
+	request.AddCookie(created.PlayerOneCookie)
 	response = httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
-	assertAPIError(t, response, http.StatusNotFound, "game_not_found")
+	assertAPIError(t, response, http.StatusUnauthorized, "unauthorized")
 }
 
 func TestSubmitMovePersistsDerivedWordAndProtectsOwnership(t *testing.T) {
 	handler, repository, _ := newIntegrationHandler(t, true)
 	created := createGame(t, handler)
-	playerOneCookie := sessionCookie(t, handler, created.GameID, created.PlayerOneToken)
-	playerTwoCookie := sessionCookie(t, handler, created.GameID, created.PlayerTwoToken)
+	playerOneCookie := created.PlayerOneCookie
+	playerTwoCookie := created.PlayerTwoCookie
 	initial := loadGame(t, handler, created.GameID, playerOneCookie)
 
 	first := submitMove(t, handler, created.GameID, playerOneCookie, []int{0, 1, 5}, 0)
@@ -322,8 +259,8 @@ func TestSubmitMovePersistsDerivedWordAndProtectsOwnership(t *testing.T) {
 func TestSubmitMoveReturnsStructuredRuleAndVersionErrors(t *testing.T) {
 	handler, repository, _ := newIntegrationHandler(t, true)
 	created := createGame(t, handler)
-	playerOneCookie := sessionCookie(t, handler, created.GameID, created.PlayerOneToken)
-	playerTwoCookie := sessionCookie(t, handler, created.GameID, created.PlayerTwoToken)
+	playerOneCookie := created.PlayerOneCookie
+	playerTwoCookie := created.PlayerTwoCookie
 
 	assertAPIError(t, submitMove(t, handler, created.GameID, nil, []int{0}, 0), http.StatusUnauthorized, "unauthorized")
 	assertAPIError(t, submitMove(t, handler, created.GameID, playerOneCookie, []int{0, 0}, 0), http.StatusUnprocessableEntity, "duplicate_tile")
@@ -348,8 +285,8 @@ func TestSubmitMoveReturnsStructuredRuleAndVersionErrors(t *testing.T) {
 func TestDictionaryValidationAcceptsEnglishAndRejectsGibberishAtomically(t *testing.T) {
 	handler, repository := newDictionaryIntegrationHandler(t, filepath.Join(t.TempDir(), "letterpress.db"))
 	created := createGame(t, handler)
-	playerOne := sessionCookie(t, handler, created.GameID, created.PlayerOneToken)
-	playerTwo := sessionCookie(t, handler, created.GameID, created.PlayerTwoToken)
+	playerOne := created.PlayerOneCookie
+	playerTwo := created.PlayerTwoCookie
 
 	accepted := decodeGameView(t, submitMove(t, handler, created.GameID, playerOne, []int{0, 1, 2}, 0), http.StatusOK)
 	if len(accepted.Moves) != 1 || accepted.Moves[0].Word != "CAT" || accepted.Version != 1 {
@@ -386,8 +323,8 @@ func TestDictionaryValidationRemainsDeterministicAcrossRestart(t *testing.T) {
 	databasePath := filepath.Join(t.TempDir(), "letterpress.db")
 	handler, repository := newDictionaryIntegrationHandler(t, databasePath)
 	created := createGame(t, handler)
-	playerOne := sessionCookie(t, handler, created.GameID, created.PlayerOneToken)
-	playerTwo := sessionCookie(t, handler, created.GameID, created.PlayerTwoToken)
+	playerOne := created.PlayerOneCookie
+	playerTwo := created.PlayerTwoCookie
 	decodeGameView(t, submitMove(t, handler, created.GameID, playerOne, []int{0, 1, 2}, 0), http.StatusOK)
 	if err := repository.Close(); err != nil {
 		t.Fatalf("close dictionary repository: %v", err)
@@ -404,7 +341,7 @@ func TestDictionaryValidationRemainsDeterministicAcrossRestart(t *testing.T) {
 func TestConcurrentDictionaryValidationCreatesOneTurn(t *testing.T) {
 	handler, repository := newDictionaryIntegrationHandler(t, filepath.Join(t.TempDir(), "letterpress.db"))
 	created := createGame(t, handler)
-	cookie := sessionCookie(t, handler, created.GameID, created.PlayerOneToken)
+	cookie := created.PlayerOneCookie
 	start := make(chan struct{})
 	responses := make(chan *httptest.ResponseRecorder, 2)
 	for _, indexes := range [][]int{{0, 1, 2}, {6, 7, 8}} {
@@ -428,7 +365,7 @@ func TestConcurrentDictionaryValidationCreatesOneTurn(t *testing.T) {
 func TestConcurrentDoubleSubmissionCreatesOneTurn(t *testing.T) {
 	handler, repository, _ := newIntegrationHandler(t, true)
 	created := createGame(t, handler)
-	cookie := sessionCookie(t, handler, created.GameID, created.PlayerOneToken)
+	cookie := created.PlayerOneCookie
 
 	start := make(chan struct{})
 	responses := make(chan *httptest.ResponseRecorder, 2)
@@ -462,8 +399,8 @@ func TestConcurrentDoubleSubmissionCreatesOneTurn(t *testing.T) {
 func TestFinalMovePersistsWinnerHistoryAndRejectsFurtherPlay(t *testing.T) {
 	handler, repository, _ := newIntegrationHandler(t, true)
 	created := createGame(t, handler)
-	playerOneCookie := sessionCookie(t, handler, created.GameID, created.PlayerOneToken)
-	playerTwoCookie := sessionCookie(t, handler, created.GameID, created.PlayerTwoToken)
+	playerOneCookie := created.PlayerOneCookie
+	playerTwoCookie := created.PlayerTwoCookie
 	indexes := make([]int, 25)
 	for index := range indexes {
 		indexes[index] = index
@@ -502,9 +439,10 @@ func TestGameAndSessionResumeAfterRepositoryRestart(t *testing.T) {
 		t.Fatalf("open repository: %v", err)
 	}
 	now := time.Date(2026, time.November, 2, 8, 0, 0, 0, time.UTC)
-	handler := NewHandler(testService(repository), Config{InsecureCookies: true, Now: func() time.Time { return now }})
+	service := testService(repository)
+	handler := newTestHTTPHandler(service, Config{InsecureCookies: true, Now: func() time.Time { return now }})
 	created := createGame(t, handler)
-	cookie := sessionCookie(t, handler, created.GameID, created.PlayerOneToken)
+	cookie := created.PlayerOneCookie
 	before := loadGame(t, handler, created.GameID, cookie)
 	if err := repository.Close(); err != nil {
 		t.Fatalf("close repository: %v", err)
@@ -525,41 +463,50 @@ func TestGameAndSessionResumeAfterRepositoryRestart(t *testing.T) {
 func TestLocalDevelopmentCanDisableSecureCookie(t *testing.T) {
 	handler, _, _ := newIntegrationHandler(t, false)
 	created := createGame(t, handler)
-	response := exchangeSession(t, handler, created.GameID, created.PlayerOneToken)
-	if response.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
-	}
-	cookies := response.Result().Cookies()
-	if len(cookies) != 1 || cookies[0].Secure {
-		t.Fatalf("local development cookie = %#v, want one non-Secure cookie", cookies)
+	if created.PlayerOneCookie.Secure || created.PlayerTwoCookie.Secure {
+		t.Fatalf("local development cookies should not be Secure: %#v / %#v", created.PlayerOneCookie, created.PlayerTwoCookie)
 	}
 }
 
 func TestMutationsRequireAnAllowedOrigin(t *testing.T) {
 	handler, _, _ := newIntegrationHandler(t, true)
+	created := createGame(t, handler)
 	for _, origin := range []string{"", "https://attacker.example"} {
-		request := httptest.NewRequest(http.MethodPost, testOrigin+"/api/v1/games", nil)
+		request := httptest.NewRequest(http.MethodPost, testOrigin+"/api/v1/games/"+created.GameID+"/moves", strings.NewReader(`{}`))
 		request.Header.Set("Origin", origin)
+		request.AddCookie(created.PlayerOneCookie)
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, request)
 		assertAPIError(t, response, http.StatusForbidden, "invalid_origin")
 	}
 }
 
-func TestSessionRejectsInvalidJSONWithConsistentError(t *testing.T) {
+func TestRegisteredNonMemberCannotDiscoverOrAccessGame(t *testing.T) {
 	handler, _, _ := newIntegrationHandler(t, true)
-	created := createGame(t, handler)
-	request := newMutationRequest(http.MethodPost, fmt.Sprintf("/api/v1/games/%s/sessions", created.GameID), strings.NewReader(`{"token":true}`))
-	request.Header.Set("Content-Type", "application/json")
+	first := createGame(t, handler)
+	second := createGame(t, handler)
+	request := httptest.NewRequest(http.MethodGet, testOrigin+"/api/v1/games/"+first.GameID, nil)
+	request.AddCookie(second.PlayerOneCookie)
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
-	assertAPIError(t, response, http.StatusBadRequest, "invalid_request")
+	assertAPIError(t, response, http.StatusUnauthorized, "unauthorized")
 }
 
 type createdGameResponse struct {
-	GameID         string `json:"gameId"`
-	PlayerOneToken string `json:"playerOneToken"`
-	PlayerTwoToken string `json:"playerTwoToken"`
+	GameID          string
+	PlayerOne       app.RegisteredPlayer
+	PlayerTwo       app.RegisteredPlayer
+	PlayerOneCookie *http.Cookie
+	PlayerTwoCookie *http.Cookie
+}
+
+type testHTTPHandler struct {
+	http.Handler
+	service *app.Service
+}
+
+func newTestHTTPHandler(service *app.Service, config Config) http.Handler {
+	return &testHTTPHandler{Handler: NewHandler(service, config), service: service}
 }
 
 func newIntegrationHandler(t *testing.T, secureCookies bool) (http.Handler, *sqlite.Repository, time.Time) {
@@ -570,7 +517,8 @@ func newIntegrationHandler(t *testing.T, secureCookies bool) (http.Handler, *sql
 	}
 	t.Cleanup(func() { _ = repository.Close() })
 	now := time.Date(2026, time.October, 31, 9, 0, 0, 0, time.UTC)
-	return NewHandler(testServiceAt(repository, func() time.Time { return now }), Config{InsecureCookies: !secureCookies, Now: func() time.Time { return now }}), repository, now
+	service := testServiceAt(repository, func() time.Time { return now })
+	return newTestHTTPHandler(service, Config{InsecureCookies: !secureCookies, Now: func() time.Time { return now }}), repository, now
 }
 
 func testService(repository *sqlite.Repository) *app.Service {
@@ -594,51 +542,32 @@ func newDictionaryIntegrationHandler(t *testing.T, databasePath string) (http.Ha
 	}
 	service := app.NewServiceWithDependencies(repository, generator, game.EnglishDictionaryValidator())
 	now := time.Date(2026, time.November, 3, 12, 0, 0, 0, time.UTC)
-	return NewHandler(service, Config{InsecureCookies: true, Now: func() time.Time { return now }}), repository
+	return newTestHTTPHandler(service, Config{InsecureCookies: true, Now: func() time.Time { return now }}), repository
 }
+
+var createdGameSequence atomic.Uint64
 
 func createGame(t *testing.T, handler http.Handler) createdGameResponse {
 	t.Helper()
-	request := newMutationRequest(http.MethodPost, "/api/v1/games", nil)
-	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, request)
-	if response.Code != http.StatusCreated {
-		t.Fatalf("create status = %d, want %d; body = %s", response.Code, http.StatusCreated, response.Body.String())
+	testHandler, ok := handler.(*testHTTPHandler)
+	if !ok {
+		t.Fatal("game assignment requires the integration test handler")
 	}
-	if response.Header().Get("Cache-Control") != "no-store" {
-		t.Fatalf("Cache-Control = %q, want no-store", response.Header().Get("Cache-Control"))
+	sequence := createdGameSequence.Add(1)
+	firstResponse, first := enterPlayer(t, handler, fmt.Sprintf("Player %d A", sequence))
+	secondResponse, second := enterPlayer(t, handler, fmt.Sprintf("Player %d B", sequence))
+	firstCookies, secondCookies := firstResponse.Result().Cookies(), secondResponse.Result().Cookies()
+	if len(firstCookies) != 1 || len(secondCookies) != 1 {
+		t.Fatalf("player session cookies = %d/%d, want 1/1", len(firstCookies), len(secondCookies))
 	}
-	var body struct {
-		Data createdGameResponse `json:"data"`
-	}
-	decodeResponse(t, response, &body)
-	return body.Data
-}
-
-func exchangeSession(t *testing.T, handler http.Handler, gameID, token string) *httptest.ResponseRecorder {
-	t.Helper()
-	body, err := json.Marshal(map[string]string{"token": token})
+	gameID, err := testHandler.service.CreateGame(context.Background(), first.ID, second.ID)
 	if err != nil {
-		t.Fatalf("encode session request: %v", err)
+		t.Fatalf("assign game: %v", err)
 	}
-	request := newMutationRequest(http.MethodPost, fmt.Sprintf("/api/v1/games/%s/sessions", gameID), bytes.NewReader(body))
-	request.Header.Set("Content-Type", "application/json")
-	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, request)
-	return response
-}
-
-func sessionCookie(t *testing.T, handler http.Handler, gameID, token string) *http.Cookie {
-	t.Helper()
-	response := exchangeSession(t, handler, gameID, token)
-	if response.Code != http.StatusOK {
-		t.Fatalf("exchange session status = %d, want %d", response.Code, http.StatusOK)
+	return createdGameResponse{
+		GameID: gameID, PlayerOne: first, PlayerTwo: second,
+		PlayerOneCookie: firstCookies[0], PlayerTwoCookie: secondCookies[0],
 	}
-	cookies := response.Result().Cookies()
-	if len(cookies) != 1 {
-		t.Fatalf("session cookies = %d, want 1", len(cookies))
-	}
-	return cookies[0]
 }
 
 func loadGame(t *testing.T, handler http.Handler, gameID string, cookie *http.Cookie) app.GameView {
@@ -706,24 +635,6 @@ func newMutationRequest(method, path string, body io.Reader) *http.Request {
 	}
 	request.Header.Set("Origin", testOrigin)
 	return request
-}
-
-func assertStoredHash(t *testing.T, token string, stored [32]byte) {
-	t.Helper()
-	raw, err := base64.RawURLEncoding.DecodeString(token)
-	if err != nil {
-		t.Fatalf("decode token: %v", err)
-	}
-	if len(raw) != 32 {
-		t.Fatalf("secret length = %d, want 32", len(raw))
-	}
-	want := sha256.Sum256(raw)
-	if !reflect.DeepEqual(stored, want) {
-		t.Fatalf("stored hash = %x, want %x", stored, want)
-	}
-	if strings.Contains(string(stored[:]), token) {
-		t.Fatal("stored credential contains the raw invitation token")
-	}
 }
 
 func assertAPIError(t *testing.T, response *httptest.ResponseRecorder, status int, code string) {

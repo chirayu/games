@@ -16,7 +16,7 @@ import (
 	"letterpress/backend/internal/store/sqlite/migrations"
 )
 
-func TestRegisteredPlayerMigrationUpgradesPopulatedInitialDatabase(t *testing.T) {
+func TestRegisteredGameSeatMigrationPurgesInvitationEraGames(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "letterpress.db")
 	database, err := sql.Open("sqlite", "file:"+filepath.ToSlash(path))
@@ -43,20 +43,47 @@ func TestRegisteredPlayerMigrationUpgradesPopulatedInitialDatabase(t *testing.T)
 	`, []byte("ABCDEFGHIJKLMNOPQRSTUVWXY"), make([]byte, 25), createdAt, createdAt); err != nil {
 		t.Fatalf("seed legacy game: %v", err)
 	}
+	for seat := 1; seat <= 2; seat++ {
+		hash := make([]byte, 32)
+		hash[0] = byte(seat)
+		if _, err := database.ExecContext(ctx, `
+			INSERT INTO players (game_id, seat, token_hash, created_at) VALUES ('legacy-game', ?, ?, ?)
+		`, seat, hash, createdAt); err != nil {
+			t.Fatalf("seed legacy player %d: %v", seat, err)
+		}
+	}
+	if _, err := database.ExecContext(ctx, `
+		INSERT INTO moves (game_id, player, turn_number, tile_indexes, word, created_at)
+		VALUES ('legacy-game', 1, 1, '[0]', 'A', ?)
+	`, createdAt); err != nil {
+		t.Fatalf("seed legacy move: %v", err)
+	}
 	if err := database.Close(); err != nil {
 		t.Fatalf("close initial database: %v", err)
 	}
 
 	repository := openTestRepository(t, path)
-	if _, err := repository.GetGame(ctx, "legacy-game"); err != nil {
-		t.Fatalf("legacy game after additive migration: %v", err)
+	if _, err := repository.GetGame(ctx, "legacy-game"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("legacy game error = %v, want sql.ErrNoRows", err)
 	}
-	for _, table := range []string{"registered_players", "player_sessions"} {
+	for _, table := range []string{"registered_players", "player_sessions", "game_seats", "moves"} {
 		var found string
 		if err := repository.database.QueryRowContext(ctx,
 			"SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", table,
 		).Scan(&found); err != nil {
 			t.Fatalf("find migrated table %s: %v", table, err)
+		}
+	}
+	var legacyPlayers int
+	if err := repository.database.QueryRowContext(ctx,
+		"SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'players'",
+	).Scan(&legacyPlayers); err != nil || legacyPlayers != 0 {
+		t.Fatalf("legacy players table count = %d, err %v", legacyPlayers, err)
+	}
+	for _, table := range []string{"games", "game_seats", "moves"} {
+		var rows int
+		if err := repository.database.QueryRowContext(ctx, "SELECT count(*) FROM "+table).Scan(&rows); err != nil || rows != 0 {
+			t.Fatalf("migrated %s row count = %d, err %v; want 0", table, rows, err)
 		}
 	}
 }

@@ -2,7 +2,7 @@
 
 This directory contains the HTTP-based Letterpress implementation. A Go server
 owns the authoritative game state in SQLite and serves a Vue single-page
-application. Players may return days later using their private game links.
+application. Players authenticate by name and may return to assigned games.
 
 Development is tracked in the [Letterpress Linear project](https://linear.app/chirayu1/project/letterpress-0eec12ba3679/overview).
 
@@ -42,9 +42,10 @@ player. There is deliberately no password or ownership verification yet, so
 anyone who knows a player name can access that identity. Each browser receives
 an independent secure session and can log out without affecting other sessions.
 
-This identity API currently coexists with the invitation-based game flow. The
-following migration work will replace game invitations with registered-player
-membership and allocation; new UI for name entry is tracked separately.
+Game seats reference registered players directly. The old invitation tokens,
+game-scoped cookies, and public creation/session-exchange endpoints have been
+removed; the migration intentionally purges invitation-era games. The game
+allocation REST API and new player-facing UI are tracked separately.
 
 ## Layout
 
@@ -137,8 +138,8 @@ use cryptographically secure random letters.
 ## Development status
 
 The pure Go game engine, SQLite persistence layer, name-only registered-player
-sessions, secure game creation and
-invitation flow, authenticated responsive board, transactional move submission,
+sessions, registered game membership, authenticated responsive board,
+transactional move submission,
 multi-day focus/visibility refresh and polling, recoverable local move drafts,
 server-authoritative English dictionary validation, final results and move
 history, HTTP service, Vue application, router, Vite development proxy, and

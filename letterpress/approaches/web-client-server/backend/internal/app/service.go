@@ -22,15 +22,12 @@ const (
 	secretBytes   = 32
 )
 
-// ErrInvalidSecret means an invitation secret is malformed or does not belong
-// to a player in the requested game.
-var ErrInvalidSecret = errors.New("invalid invitation secret")
-
 var (
 	// ErrGameNotFound means the requested game does not exist.
 	ErrGameNotFound = errors.New("game not found")
-	// ErrUnauthorized means the game-scoped player session is absent or invalid.
-	ErrUnauthorized = errors.New("unauthorized game session")
+	// ErrUnauthorized means the registered player is not authenticated or does
+	// not hold a seat in the requested game.
+	ErrUnauthorized = errors.New("unauthorized game access")
 	// ErrVersionConflict means the client submitted against stale game state.
 	ErrVersionConflict = errors.New("game version conflict")
 )
@@ -41,26 +38,11 @@ type Store interface {
 	CreateRegisteredPlayerSession(context.Context, sqlite.RegisteredPlayer, sqlite.PlayerSession) (sqlite.RegisteredPlayer, bool, error)
 	GetRegisteredPlayerBySessionHash(context.Context, [32]byte, time.Time) (sqlite.RegisteredPlayer, error)
 	DeletePlayerSession(context.Context, [32]byte) error
-	CreateGame(context.Context, sqlite.Game, [2]sqlite.Player) error
+	CreateGame(context.Context, sqlite.Game, [2]sqlite.GameSeat) error
 	GetGame(context.Context, string) (sqlite.Game, error)
 	ListMoves(context.Context, string) ([]sqlite.Move, error)
-	GetPlayerByTokenHash(context.Context, string, [32]byte) (sqlite.Player, error)
-	TransactMove(context.Context, string, [32]byte, int64, sqlite.MoveOperation) error
-}
-
-// CreatedGame contains the raw capabilities returned exactly once at creation.
-// Persistence receives only their hashes.
-type CreatedGame struct {
-	ID             string
-	PlayerOneToken string
-	PlayerTwoToken string
-}
-
-// Session identifies the player seat established by an invitation secret.
-type Session struct {
-	GameID string
-	Seat   int64
-	Token  string
+	GetGameSeatByPlayer(context.Context, string, string) (sqlite.GameSeat, error)
+	TransactMove(context.Context, string, string, int64, sqlite.MoveOperation) error
 }
 
 // GameView is the authenticated, derived state returned to a player.
@@ -108,7 +90,7 @@ type Scores struct {
 	PlayerTwo int `json:"playerTwo"`
 }
 
-// Service coordinates game creation and player authentication.
+// Service coordinates registered players and authoritative game operations.
 type Service struct {
 	store     Store
 	random    io.Reader
@@ -153,30 +135,21 @@ func (service *Service) Ready(ctx context.Context) error {
 	return service.store.Health(ctx)
 }
 
-// CreateGame creates a default game and two independent player capabilities.
-func (service *Service) CreateGame(ctx context.Context) (CreatedGame, error) {
+// CreateGame creates a default game assigned to two registered players. Public
+// callers receive games through the allocation service rather than HTTP game
+// creation.
+func (service *Service) CreateGame(ctx context.Context, playerOneID, playerTwoID string) (string, error) {
+	if playerOneID == "" || playerTwoID == "" || playerOneID == playerTwoID {
+		return "", errors.New("two distinct registered players are required")
+	}
 	domainGame, err := game.New(game.DefaultWidth, game.DefaultHeight, service.generator, service.validator)
 	if err != nil {
-		return CreatedGame{}, fmt.Errorf("generate game board: %w", err)
+		return "", fmt.Errorf("generate game board: %w", err)
 	}
 
 	gameID, err := service.randomToken(gameIDBytes)
 	if err != nil {
-		return CreatedGame{}, fmt.Errorf("generate game ID: %w", err)
-	}
-	playerOneToken, playerOneHash, err := service.playerToken()
-	if err != nil {
-		return CreatedGame{}, fmt.Errorf("generate player one secret: %w", err)
-	}
-	playerTwoToken, playerTwoHash, err := service.playerToken()
-	if err != nil {
-		return CreatedGame{}, fmt.Errorf("generate player two secret: %w", err)
-	}
-	for playerTwoHash == playerOneHash {
-		playerTwoToken, playerTwoHash, err = service.playerToken()
-		if err != nil {
-			return CreatedGame{}, fmt.Errorf("regenerate player two secret: %w", err)
-		}
+		return "", fmt.Errorf("generate game ID: %w", err)
 	}
 
 	createdAt := service.now().UTC()
@@ -191,53 +164,38 @@ func (service *Service) CreateGame(ctx context.Context) (CreatedGame, error) {
 		CreatedAt:     createdAt,
 		UpdatedAt:     createdAt,
 	}
-	players := [2]sqlite.Player{
-		{GameID: gameID, Seat: int64(game.PlayerOne), TokenHash: playerOneHash, CreatedAt: createdAt},
-		{GameID: gameID, Seat: int64(game.PlayerTwo), TokenHash: playerTwoHash, CreatedAt: createdAt},
+	seats := [2]sqlite.GameSeat{
+		{GameID: gameID, Seat: int64(game.PlayerOne), PlayerID: playerOneID, CreatedAt: createdAt},
+		{GameID: gameID, Seat: int64(game.PlayerTwo), PlayerID: playerTwoID, CreatedAt: createdAt},
 	}
-	if err := service.store.CreateGame(ctx, storedGame, players); err != nil {
-		return CreatedGame{}, fmt.Errorf("persist game: %w", err)
+	if err := service.store.CreateGame(ctx, storedGame, seats); err != nil {
+		return "", fmt.Errorf("persist game: %w", err)
 	}
-
-	return CreatedGame{ID: gameID, PlayerOneToken: playerOneToken, PlayerTwoToken: playerTwoToken}, nil
-}
-
-// ExchangeSession authenticates one invitation capability for a game.
-func (service *Service) ExchangeSession(ctx context.Context, gameID, token string) (Session, error) {
-	tokenHash, ok := invitationHash(token)
-	if !ok {
-		return Session{}, ErrInvalidSecret
-	}
-	player, err := service.store.GetPlayerByTokenHash(ctx, gameID, tokenHash)
-	if errors.Is(err, sql.ErrNoRows) {
-		return Session{}, ErrInvalidSecret
-	}
-	if err != nil {
-		return Session{}, fmt.Errorf("look up player: %w", err)
-	}
-	return Session{GameID: gameID, Seat: player.Seat, Token: token}, nil
+	return gameID, nil
 }
 
 // GetGame returns the current authoritative state for an authenticated player.
 func (service *Service) GetGame(ctx context.Context, gameID, token string) (GameView, error) {
+	player, err := service.CurrentPlayer(ctx, token)
+	if errors.Is(err, ErrInvalidPlayerSession) {
+		return GameView{}, ErrUnauthorized
+	}
+	if err != nil {
+		return GameView{}, err
+	}
+	seat, err := service.store.GetGameSeatByPlayer(ctx, gameID, player.ID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return GameView{}, ErrUnauthorized
+	}
+	if err != nil {
+		return GameView{}, fmt.Errorf("authorize game player: %w", err)
+	}
 	stored, err := service.store.GetGame(ctx, gameID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return GameView{}, ErrGameNotFound
 	}
 	if err != nil {
 		return GameView{}, fmt.Errorf("get game: %w", err)
-	}
-
-	tokenHash, ok := invitationHash(token)
-	if !ok {
-		return GameView{}, ErrUnauthorized
-	}
-	player, err := service.store.GetPlayerByTokenHash(ctx, gameID, tokenHash)
-	if errors.Is(err, sql.ErrNoRows) {
-		return GameView{}, ErrUnauthorized
-	}
-	if err != nil {
-		return GameView{}, fmt.Errorf("authenticate player: %w", err)
 	}
 
 	if len(stored.BoardLetters) != game.DefaultWidth*game.DefaultHeight || len(stored.TileOwners) != len(stored.BoardLetters) {
@@ -286,7 +244,7 @@ func (service *Service) GetGame(ctx context.Context, gameID, token string) (Game
 	view := GameView{
 		ID: gameID, Width: game.DefaultWidth, Height: game.DefaultHeight, Tiles: tiles,
 		Scores:       Scores{PlayerOne: analysis.PlayerOneScore, PlayerTwo: analysis.PlayerTwoScore},
-		ActivePlayer: stored.CurrentPlayer, PlayerSeat: player.Seat, Version: stored.Version, Status: stored.Status,
+		ActivePlayer: stored.CurrentPlayer, PlayerSeat: seat.Seat, Version: stored.Version, Status: stored.Status,
 		Moves: moveViews,
 	}
 	if outcome, ok := restored.Outcome(); ok {
@@ -305,13 +263,16 @@ func (service *Service) SubmitMove(
 	tileIndexes []int,
 	expectedVersion int64,
 ) (GameView, error) {
-	tokenHash, ok := invitationHash(token)
-	if !ok {
+	player, err := service.CurrentPlayer(ctx, token)
+	if errors.Is(err, ErrInvalidPlayerSession) {
 		return GameView{}, ErrUnauthorized
 	}
-	err := service.store.TransactMove(ctx, gameID, tokenHash, expectedVersion, func(
+	if err != nil {
+		return GameView{}, err
+	}
+	err = service.store.TransactMove(ctx, gameID, player.ID, expectedVersion, func(
 		stored sqlite.Game,
-		player sqlite.Player,
+		seat sqlite.GameSeat,
 		storedMoves []sqlite.Move,
 	) (sqlite.Move, sqlite.GameState, error) {
 		owners := make([]game.Player, len(stored.TileOwners))
@@ -330,7 +291,7 @@ func (service *Service) SubmitMove(
 		if err != nil {
 			return sqlite.Move{}, sqlite.GameState{}, fmt.Errorf("restore game for move: %w", err)
 		}
-		accepted, err := restored.Play(game.Player(player.Seat), tileIndexes)
+		accepted, err := restored.Play(game.Player(seat.Seat), tileIndexes)
 		if err != nil {
 			return sqlite.Move{}, sqlite.GameState{}, err
 		}
@@ -406,10 +367,6 @@ func (service *Service) randomTokenBytes(size int) (string, []byte, error) {
 		return "", nil, err
 	}
 	return base64.RawURLEncoding.EncodeToString(randomBytes), randomBytes, nil
-}
-
-func invitationHash(token string) ([32]byte, bool) {
-	return credentialHash(token)
 }
 
 func credentialHash(token string) ([32]byte, bool) {
