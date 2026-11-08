@@ -7,6 +7,11 @@ SELECT id, display_name, normalized_name, created_at
 FROM registered_players
 WHERE normalized_name = ?;
 
+-- name: GetRegisteredPlayerByID :one
+SELECT id, display_name, normalized_name, created_at
+FROM registered_players
+WHERE id = ?;
+
 -- name: CreatePlayerSession :exec
 INSERT INTO player_sessions (token_hash, player_id, expires_at, created_at)
 VALUES (?, ?, ?, ?);

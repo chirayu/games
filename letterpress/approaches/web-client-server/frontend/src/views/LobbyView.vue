@@ -1,8 +1,16 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import { useRouter } from "vue-router";
 
 import { getActiveGames, type ActiveGameSummary } from "../api/games";
+import {
+  acceptChallenge,
+  cancelChallenge,
+  createSpecifiedChallenge,
+  declineChallenge,
+  getPendingChallenges,
+  type ChallengeSummary,
+} from "../api/allocations";
 import { searchPlayers, type PublicPlayer } from "../api/players";
 import { APIError } from "../api/request";
 import {
@@ -22,6 +30,16 @@ const searchQuery = ref("");
 const searchResults = ref<PublicPlayer[]>([]);
 const searchCursor = ref("");
 const searchState = ref<"idle" | "loading" | "ready" | "error">("idle");
+const challenges = ref<ChallengeSummary[]>([]);
+const challengeError = ref("");
+const challengeBusy = ref("");
+
+const incomingChallenges = computed(() =>
+  challenges.value.filter((challenge) => challenge.direction === "incoming"),
+);
+const outgoingChallenges = computed(() =>
+  challenges.value.filter((challenge) => challenge.direction === "outgoing"),
+);
 
 const yourTurn = computed(() =>
   games.value.filter((game) => game.activePlayer === game.playerSeat),
@@ -30,7 +48,73 @@ const waiting = computed(() =>
   games.value.filter((game) => game.activePlayer !== game.playerSeat),
 );
 
-onMounted(() => loadGames(false));
+onMounted(() => {
+  void refreshLobby();
+  window.addEventListener("focus", refreshLobby);
+  document.addEventListener("visibilitychange", refreshWhenVisible);
+});
+onUnmounted(() => {
+  window.removeEventListener("focus", refreshLobby);
+  document.removeEventListener("visibilitychange", refreshWhenVisible);
+});
+
+function refreshWhenVisible() {
+  if (document.visibilityState === "visible") void refreshLobby();
+}
+
+async function refreshLobby() {
+  await Promise.all([loadGames(false), loadChallenges()]);
+}
+
+async function loadChallenges() {
+  try {
+    challenges.value = await getPendingChallenges();
+  } catch (error) {
+    if (error instanceof APIError && error.status === 401) {
+      gamesState.value = "stale";
+    }
+  }
+}
+
+async function createChallenge(opponentId: string) {
+  challengeBusy.value = `create:${opponentId}`;
+  challengeError.value = "";
+  try {
+    await createSpecifiedChallenge(opponentId);
+    await loadChallenges();
+  } catch {
+    challengeError.value = "The challenge could not be sent. Try again.";
+  } finally {
+    challengeBusy.value = "";
+  }
+}
+
+async function actOnChallenge(
+  challenge: ChallengeSummary,
+  action: "accept" | "decline" | "cancel",
+) {
+  challengeBusy.value = challenge.allocationId;
+  challengeError.value = "";
+  try {
+    const allocation =
+      action === "accept"
+        ? await acceptChallenge(challenge.allocationId)
+        : action === "decline"
+          ? await declineChallenge(challenge.allocationId)
+          : await cancelChallenge(challenge.allocationId);
+    if (allocation.state === "allocated" && allocation.gameId) {
+      await router.push(`/games/${allocation.gameId}`);
+      return;
+    }
+    await loadChallenges();
+  } catch {
+    challengeError.value =
+      "That challenge changed before the action completed. Refresh and try again.";
+    await loadChallenges();
+  } finally {
+    challengeBusy.value = "";
+  }
+}
 
 async function loadGames(append: boolean) {
   if (!append) gamesState.value = "loading";
@@ -138,10 +222,67 @@ async function logout() {
         aria-labelledby="empty-title"
       >
         <h2 id="empty-title">No active games yet.</h2>
-        <p>
-          Find another player below. Challenge creation arrives in the next
-          wave.
-        </p>
+        <p>Find another player below and send them a challenge.</p>
+      </section>
+
+      <p v-if="challengeError" class="notice notice--error" role="alert">
+        {{ challengeError }}
+      </p>
+
+      <section
+        v-if="incomingChallenges.length"
+        aria-labelledby="incoming-title"
+      >
+        <h2 id="incoming-title" class="section-title">Incoming challenges</h2>
+        <ul class="challenge-list">
+          <li
+            v-for="challenge in incomingChallenges"
+            :key="challenge.allocationId"
+          >
+            <strong>{{ challenge.requester.name }}</strong>
+            <div class="challenge-actions">
+              <button
+                class="primary-action"
+                type="button"
+                :disabled="challengeBusy === challenge.allocationId"
+                @click="actOnChallenge(challenge, 'accept')"
+              >
+                Accept
+              </button>
+              <button
+                class="secondary-action"
+                type="button"
+                :disabled="challengeBusy === challenge.allocationId"
+                @click="actOnChallenge(challenge, 'decline')"
+              >
+                Decline
+              </button>
+            </div>
+          </li>
+        </ul>
+      </section>
+
+      <section
+        v-if="outgoingChallenges.length"
+        aria-labelledby="outgoing-title"
+      >
+        <h2 id="outgoing-title" class="section-title">Sent challenges</h2>
+        <ul class="challenge-list">
+          <li
+            v-for="challenge in outgoingChallenges"
+            :key="challenge.allocationId"
+          >
+            <strong>{{ challenge.opponent.name }}</strong>
+            <button
+              class="secondary-action"
+              type="button"
+              :disabled="challengeBusy === challenge.allocationId"
+              @click="actOnChallenge(challenge, 'cancel')"
+            >
+              Cancel
+            </button>
+          </li>
+        </ul>
       </section>
 
       <section v-if="yourTurn.length" aria-labelledby="your-turn-title">
@@ -227,8 +368,24 @@ async function logout() {
             :key="result.id"
             :data-player-id="result.id"
           >
-            <span>{{ result.name }}</span
-            ><small>{{ result.type === "bot" ? "Bot" : "Player" }}</small>
+            <span
+              ><strong>{{ result.name }}</strong
+              ><small>{{
+                result.type === "bot" ? "Bot" : "Player"
+              }}</small></span
+            >
+            <button
+              class="secondary-action"
+              type="button"
+              :disabled="challengeBusy === `create:${result.id}`"
+              @click="createChallenge(result.id)"
+            >
+              {{
+                challengeBusy === `create:${result.id}`
+                  ? "Sending…"
+                  : "Challenge"
+              }}
+            </button>
           </li>
         </ul>
         <button

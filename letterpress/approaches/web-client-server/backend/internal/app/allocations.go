@@ -14,6 +14,8 @@ import (
 
 const allocationIDBytes = 16
 
+const specifiedChallengeLifetime = 7 * 24 * time.Hour
+
 var (
 	ErrInvalidAllocation      = errors.New("invalid game allocation")
 	ErrAllocationNotFound     = errors.New("game allocation not found")
@@ -35,6 +37,16 @@ type GameAllocation struct {
 	UpdatedAt     time.Time  `json:"updatedAt"`
 }
 
+// ChallengeSummary is a participant-scoped pending specified challenge.
+type ChallengeSummary struct {
+	AllocationID string       `json:"allocationId"`
+	Direction    string       `json:"direction"`
+	Requester    PublicPlayer `json:"requester"`
+	Opponent     PublicPlayer `json:"opponent"`
+	ExpiresAt    time.Time    `json:"expiresAt"`
+	CreatedAt    time.Time    `json:"createdAt"`
+}
+
 // CreateAllocation creates an idempotent durable request for the authenticated player.
 func (service *Service) CreateAllocation(
 	ctx context.Context,
@@ -49,10 +61,16 @@ func (service *Service) CreateAllocation(
 		return GameAllocation{}, false, ErrInvalidAllocation
 	}
 	state := ""
+	var expiresAt *time.Time
 	switch mode {
 	case "specified":
 		if opponentID == "" || opponentID == requester.ID {
 			return GameAllocation{}, false, ErrInvalidAllocation
+		}
+		if _, err := service.store.GetRegisteredPlayerByID(ctx, opponentID); errors.Is(err, sql.ErrNoRows) {
+			return GameAllocation{}, false, ErrInvalidAllocation
+		} else if err != nil {
+			return GameAllocation{}, false, fmt.Errorf("resolve allocation opponent: %w", err)
 		}
 		state = "pending_acceptance"
 	case "random", "bot":
@@ -68,9 +86,14 @@ func (service *Service) CreateAllocation(
 		return GameAllocation{}, false, fmt.Errorf("generate allocation ID: %w", err)
 	}
 	now := service.now().UTC()
+	if mode == "specified" {
+		expires := now.Add(specifiedChallengeLifetime)
+		expiresAt = &expires
+	}
 	stored, created, err := service.store.CreateGameAllocation(ctx, sqlite.GameAllocation{
 		ID: allocationID, RequesterID: requester.ID, OpponentID: opponentID,
-		Mode: mode, State: state, IdempotencyKey: idempotencyKey, CreatedAt: now, UpdatedAt: now,
+		Mode: mode, State: state, IdempotencyKey: idempotencyKey,
+		ExpiresAt: expiresAt, CreatedAt: now, UpdatedAt: now,
 	})
 	if err != nil {
 		return GameAllocation{}, false, fmt.Errorf("persist game allocation: %w", err)
@@ -87,7 +110,7 @@ func (service *Service) GetAllocation(ctx context.Context, token, allocationID s
 	if err != nil {
 		return GameAllocation{}, err
 	}
-	stored, err := service.store.GetGameAllocation(ctx, allocationID)
+	stored, err := service.store.RefreshGameAllocation(ctx, allocationID, service.now().UTC())
 	if errors.Is(err, sql.ErrNoRows) {
 		return GameAllocation{}, ErrAllocationNotFound
 	}
@@ -106,7 +129,7 @@ func (service *Service) CancelAllocation(ctx context.Context, token, allocationI
 	if err != nil {
 		return GameAllocation{}, err
 	}
-	stored, err := service.store.GetGameAllocation(ctx, allocationID)
+	stored, err := service.store.RefreshGameAllocation(ctx, allocationID, service.now().UTC())
 	if errors.Is(err, sql.ErrNoRows) || (err == nil && stored.RequesterID != player.ID) {
 		return GameAllocation{}, ErrAllocationNotFound
 	}
@@ -121,6 +144,77 @@ func (service *Service) CancelAllocation(ctx context.Context, token, allocationI
 		return GameAllocation{}, fmt.Errorf("cancel game allocation: %w", err)
 	}
 	return allocationView(stored), nil
+}
+
+// AcceptSpecifiedChallenge lets only the intended opponent allocate the game.
+func (service *Service) AcceptSpecifiedChallenge(ctx context.Context, token, allocationID string) (GameAllocation, error) {
+	player, err := service.CurrentPlayer(ctx, token)
+	if err != nil {
+		return GameAllocation{}, err
+	}
+	stored, err := service.store.RefreshGameAllocation(ctx, allocationID, service.now().UTC())
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && stored.OpponentID != player.ID) {
+		return GameAllocation{}, ErrAllocationNotFound
+	}
+	if err != nil {
+		return GameAllocation{}, fmt.Errorf("authorize challenge acceptance: %w", err)
+	}
+	if stored.Mode != "specified" || stored.State != "pending_acceptance" {
+		return GameAllocation{}, ErrInvalidAllocationState
+	}
+	return service.CompleteAllocation(ctx, allocationID, player.ID)
+}
+
+// DeclineSpecifiedChallenge lets only the intended opponent decline a live challenge.
+func (service *Service) DeclineSpecifiedChallenge(ctx context.Context, token, allocationID string) (GameAllocation, error) {
+	player, err := service.CurrentPlayer(ctx, token)
+	if err != nil {
+		return GameAllocation{}, err
+	}
+	stored, err := service.store.RefreshGameAllocation(ctx, allocationID, service.now().UTC())
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && stored.OpponentID != player.ID) {
+		return GameAllocation{}, ErrAllocationNotFound
+	}
+	if err != nil {
+		return GameAllocation{}, fmt.Errorf("authorize challenge decline: %w", err)
+	}
+	if stored.Mode != "specified" || stored.State != "pending_acceptance" {
+		return GameAllocation{}, ErrInvalidAllocationState
+	}
+	stored, err = service.store.DeclineSpecifiedAllocation(ctx, allocationID, player.ID, service.now().UTC())
+	if errors.Is(err, sqlite.ErrAllocationTransition) {
+		return GameAllocation{}, ErrInvalidAllocationState
+	}
+	if err != nil {
+		return GameAllocation{}, fmt.Errorf("decline specified challenge: %w", err)
+	}
+	return allocationView(stored), nil
+}
+
+// ListPendingChallenges returns incoming and outgoing live specified challenges.
+func (service *Service) ListPendingChallenges(ctx context.Context, token string) ([]ChallengeSummary, error) {
+	player, err := service.CurrentPlayer(ctx, token)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := service.store.ListPendingSpecifiedChallenges(ctx, player.ID, service.now().UTC(), 50)
+	if err != nil {
+		return nil, fmt.Errorf("list pending challenges: %w", err)
+	}
+	items := make([]ChallengeSummary, 0, len(rows))
+	for _, row := range rows {
+		direction := "incoming"
+		if row.RequesterID == player.ID {
+			direction = "outgoing"
+		}
+		items = append(items, ChallengeSummary{
+			AllocationID: row.AllocationID, Direction: direction,
+			Requester: PublicPlayer{ID: row.RequesterID, Name: row.RequesterName, Type: "human"},
+			Opponent:  PublicPlayer{ID: row.OpponentID, Name: row.OpponentName, Type: "human"},
+			ExpiresAt: row.ExpiresAt, CreatedAt: row.CreatedAt,
+		})
+	}
+	return items, nil
 }
 
 // CompleteAllocation atomically creates one game with requester in seat one and opponent in seat two.

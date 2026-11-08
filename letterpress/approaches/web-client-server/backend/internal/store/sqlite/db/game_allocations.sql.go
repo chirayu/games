@@ -98,6 +98,68 @@ func (q *Queries) CreateGameAllocation(ctx context.Context, arg CreateGameAlloca
 	return result.RowsAffected()
 }
 
+const declineSpecifiedAllocation = `-- name: DeclineSpecifiedAllocation :execrows
+UPDATE game_allocations
+SET state = 'declined', updated_at = ?1
+WHERE id = ?2
+  AND opponent_id = ?3
+  AND mode = 'specified'
+  AND state = 'pending_acceptance'
+  AND expires_at > ?1
+`
+
+type DeclineSpecifiedAllocationParams struct {
+	UpdatedAt  time.Time      `json:"updated_at"`
+	ID         string         `json:"id"`
+	OpponentID sql.NullString `json:"opponent_id"`
+}
+
+func (q *Queries) DeclineSpecifiedAllocation(ctx context.Context, arg DeclineSpecifiedAllocationParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, declineSpecifiedAllocation, arg.UpdatedAt, arg.ID, arg.OpponentID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const expireDueGameAllocations = `-- name: ExpireDueGameAllocations :execrows
+UPDATE game_allocations
+SET state = 'expired', updated_at = ?1
+WHERE state IN ('pending_acceptance', 'queued')
+  AND expires_at IS NOT NULL
+  AND expires_at <= ?1
+`
+
+func (q *Queries) ExpireDueGameAllocations(ctx context.Context, now time.Time) (int64, error) {
+	result, err := q.db.ExecContext(ctx, expireDueGameAllocations, now)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const expireGameAllocation = `-- name: ExpireGameAllocation :execrows
+UPDATE game_allocations
+SET state = 'expired', updated_at = ?1
+WHERE id = ?2
+  AND state IN ('pending_acceptance', 'queued')
+  AND expires_at IS NOT NULL
+  AND expires_at <= ?1
+`
+
+type ExpireGameAllocationParams struct {
+	Now time.Time `json:"now"`
+	ID  string    `json:"id"`
+}
+
+func (q *Queries) ExpireGameAllocation(ctx context.Context, arg ExpireGameAllocationParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, expireGameAllocation, arg.Now, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const getGameAllocation = `-- name: GetGameAllocation :one
 SELECT id, requester_id, opponent_id, mode, state, idempotency_key, game_id, failure_reason, expires_at, created_at, updated_at FROM game_allocations WHERE id = ?
 `
@@ -147,4 +209,73 @@ func (q *Queries) GetGameAllocationByRequesterKey(ctx context.Context, arg GetGa
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const listPendingSpecifiedChallenges = `-- name: ListPendingSpecifiedChallenges :many
+SELECT
+    a.id, a.requester_id, requester.display_name AS requester_name,
+    a.opponent_id, opponent.display_name AS opponent_name,
+    a.mode, a.state, a.expires_at, a.created_at, a.updated_at
+FROM game_allocations AS a
+JOIN registered_players AS requester ON requester.id = a.requester_id
+JOIN registered_players AS opponent ON opponent.id = a.opponent_id
+WHERE a.mode = 'specified'
+  AND a.state = 'pending_acceptance'
+  AND a.expires_at > ?1
+  AND (a.requester_id = ?2 OR a.opponent_id = ?2)
+ORDER BY a.created_at DESC, a.id DESC
+LIMIT ?3
+`
+
+type ListPendingSpecifiedChallengesParams struct {
+	Now         sql.NullTime `json:"now"`
+	PlayerID    string       `json:"player_id"`
+	ResultLimit int64        `json:"result_limit"`
+}
+
+type ListPendingSpecifiedChallengesRow struct {
+	ID            string         `json:"id"`
+	RequesterID   string         `json:"requester_id"`
+	RequesterName string         `json:"requester_name"`
+	OpponentID    sql.NullString `json:"opponent_id"`
+	OpponentName  string         `json:"opponent_name"`
+	Mode          string         `json:"mode"`
+	State         string         `json:"state"`
+	ExpiresAt     sql.NullTime   `json:"expires_at"`
+	CreatedAt     time.Time      `json:"created_at"`
+	UpdatedAt     time.Time      `json:"updated_at"`
+}
+
+func (q *Queries) ListPendingSpecifiedChallenges(ctx context.Context, arg ListPendingSpecifiedChallengesParams) ([]ListPendingSpecifiedChallengesRow, error) {
+	rows, err := q.db.QueryContext(ctx, listPendingSpecifiedChallenges, arg.Now, arg.PlayerID, arg.ResultLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListPendingSpecifiedChallengesRow{}
+	for rows.Next() {
+		var i ListPendingSpecifiedChallengesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.RequesterID,
+			&i.RequesterName,
+			&i.OpponentID,
+			&i.OpponentName,
+			&i.Mode,
+			&i.State,
+			&i.ExpiresAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }

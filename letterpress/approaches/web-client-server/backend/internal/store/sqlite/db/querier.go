@@ -6,6 +6,7 @@ package db
 
 import (
 	"context"
+	"time"
 )
 
 type Querier interface {
@@ -17,16 +18,21 @@ type Querier interface {
 	CreateMove(ctx context.Context, arg CreateMoveParams) error
 	CreatePlayerSession(ctx context.Context, arg CreatePlayerSessionParams) error
 	CreateRegisteredPlayer(ctx context.Context, arg CreateRegisteredPlayerParams) (int64, error)
+	DeclineSpecifiedAllocation(ctx context.Context, arg DeclineSpecifiedAllocationParams) (int64, error)
 	DeletePlayerSession(ctx context.Context, tokenHash []byte) (int64, error)
+	ExpireDueGameAllocations(ctx context.Context, now time.Time) (int64, error)
+	ExpireGameAllocation(ctx context.Context, arg ExpireGameAllocationParams) (int64, error)
 	GetGame(ctx context.Context, id string) (Game, error)
 	GetGameAllocation(ctx context.Context, id string) (GameAllocation, error)
 	GetGameAllocationByRequesterKey(ctx context.Context, arg GetGameAllocationByRequesterKeyParams) (GameAllocation, error)
 	GetGameSeatByPlayer(ctx context.Context, arg GetGameSeatByPlayerParams) (GameSeat, error)
+	GetRegisteredPlayerByID(ctx context.Context, id string) (RegisteredPlayer, error)
 	GetRegisteredPlayerByNormalizedName(ctx context.Context, normalizedName string) (RegisteredPlayer, error)
 	GetRegisteredPlayerBySessionHash(ctx context.Context, arg GetRegisteredPlayerBySessionHashParams) (RegisteredPlayer, error)
 	ListActiveGamesForPlayer(ctx context.Context, arg ListActiveGamesForPlayerParams) ([]ListActiveGamesForPlayerRow, error)
 	ListGameSeats(ctx context.Context, gameID string) ([]GameSeat, error)
 	ListMoves(ctx context.Context, gameID string) ([]Move, error)
+	ListPendingSpecifiedChallenges(ctx context.Context, arg ListPendingSpecifiedChallengesParams) ([]ListPendingSpecifiedChallengesRow, error)
 	SearchRegisteredPlayers(ctx context.Context, arg SearchRegisteredPlayersParams) ([]RegisteredPlayer, error)
 	UpdateGameState(ctx context.Context, arg UpdateGameStateParams) (int64, error)
 }

@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -46,8 +47,11 @@ func NewHandler(service *app.Service, config Config) http.Handler {
 	mux.HandleFunc("GET /api/v1/games/{gameID}", handler.getGame)
 	mux.HandleFunc("POST /api/v1/games/{gameID}/moves", handler.submitMove)
 	mux.HandleFunc("POST /api/v1/game-allocations", handler.createAllocation)
+	mux.HandleFunc("GET /api/v1/game-allocations", handler.listPendingChallenges)
 	mux.HandleFunc("GET /api/v1/game-allocations/{allocationID}", handler.getAllocation)
 	mux.HandleFunc("DELETE /api/v1/game-allocations/{allocationID}", handler.cancelAllocation)
+	mux.HandleFunc("POST /api/v1/game-allocations/{allocationID}/accept", handler.acceptSpecifiedChallenge)
+	mux.HandleFunc("POST /api/v1/game-allocations/{allocationID}/decline", handler.declineSpecifiedChallenge)
 	if config.Frontend != nil {
 		mux.HandleFunc("GET /", handler.frontend)
 	}
@@ -286,6 +290,44 @@ func (handler *handler) createAllocation(response http.ResponseWriter, request *
 func (handler *handler) getAllocation(response http.ResponseWriter, request *http.Request) {
 	response.Header().Set("Cache-Control", "no-store")
 	allocation, err := handler.service.GetAllocation(
+		request.Context(), handler.playerSessionToken(request), request.PathValue("allocationID"),
+	)
+	if handler.writeAllocationError(response, err) {
+		return
+	}
+	writeJSON(response, http.StatusOK, map[string]any{"data": allocation})
+}
+
+func (handler *handler) listPendingChallenges(response http.ResponseWriter, request *http.Request) {
+	response.Header().Set("Cache-Control", "no-store")
+	items, err := handler.service.ListPendingChallenges(
+		request.Context(), handler.playerSessionToken(request),
+	)
+	if handler.writeAllocationError(response, err) {
+		return
+	}
+	writeJSON(response, http.StatusOK, map[string]any{"data": map[string]any{"items": items}})
+}
+
+func (handler *handler) acceptSpecifiedChallenge(response http.ResponseWriter, request *http.Request) {
+	handler.transitionSpecifiedChallenge(response, request, handler.service.AcceptSpecifiedChallenge)
+}
+
+func (handler *handler) declineSpecifiedChallenge(response http.ResponseWriter, request *http.Request) {
+	handler.transitionSpecifiedChallenge(response, request, handler.service.DeclineSpecifiedChallenge)
+}
+
+func (handler *handler) transitionSpecifiedChallenge(
+	response http.ResponseWriter,
+	request *http.Request,
+	transition func(context.Context, string, string) (app.GameAllocation, error),
+) {
+	response.Header().Set("Cache-Control", "no-store")
+	if !handler.validOrigin(request) {
+		writeError(response, http.StatusForbidden, "invalid_origin", "request origin is not allowed")
+		return
+	}
+	allocation, err := transition(
 		request.Context(), handler.playerSessionToken(request), request.PathValue("allocationID"),
 	)
 	if handler.writeAllocationError(response, err) {

@@ -7,10 +7,14 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"letterpress/backend/internal/app"
+	"letterpress/backend/internal/game"
+	"letterpress/backend/internal/store/sqlite"
 )
 
 func TestAllocationAPIIsIdempotentPrivateAndCancellable(t *testing.T) {
@@ -105,6 +109,163 @@ func TestConcurrentAllocationCompletionCreatesOneAccessibleGame(t *testing.T) {
 	}
 	if again, err := service.CompleteAllocation(context.Background(), allocation.ID, bob.ID); err != nil || again.GameID != gameID {
 		t.Fatalf("idempotent completion = %#v, err %v", again, err)
+	}
+}
+
+func TestSpecifiedChallengeActionsAndPendingLists(t *testing.T) {
+	handler, _, _ := newIntegrationHandler(t, true)
+	alice, aliceCookie := loginLobbyPlayer(t, handler, "Alice")
+	bob, bobCookie := loginLobbyPlayer(t, handler, "Bob")
+	_, eveCookie := loginLobbyPlayer(t, handler, "Eve")
+
+	challenge := createAllocationRequest(t, handler, aliceCookie, "accept-me", "specified", bob.ID, http.StatusCreated)
+	assertPendingChallenge(t, handler, aliceCookie, challenge.ID, "outgoing")
+	assertPendingChallenge(t, handler, bobCookie, challenge.ID, "incoming")
+	actionAllocationRequest(t, handler, eveCookie, challenge.ID, "accept", http.StatusNotFound)
+	actionAllocationRequest(t, handler, aliceCookie, challenge.ID, "accept", http.StatusNotFound)
+	accepted := actionAllocationRequest(t, handler, bobCookie, challenge.ID, "accept", http.StatusOK)
+	if accepted.State != "allocated" || accepted.GameID == "" || accepted.RequesterID != alice.ID {
+		t.Fatalf("accepted allocation = %#v", accepted)
+	}
+	actionAllocationRequest(t, handler, bobCookie, challenge.ID, "decline", http.StatusConflict)
+
+	declined := createAllocationRequest(t, handler, aliceCookie, "decline-me", "specified", bob.ID, http.StatusCreated)
+	got := actionAllocationRequest(t, handler, bobCookie, declined.ID, "decline", http.StatusOK)
+	if got.State != "declined" {
+		t.Fatalf("declined allocation = %#v", got)
+	}
+	assertNoPendingChallenge(t, handler, aliceCookie, declined.ID)
+}
+
+func TestSpecifiedChallengeExpiresAfterSevenDays(t *testing.T) {
+	repository, err := sqlite.Open(context.Background(), filepath.Join(t.TempDir(), "letterpress.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = repository.Close() })
+	now := time.Date(2026, time.November, 1, 10, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return now }
+	service := app.NewServiceWithDependenciesAndClock(repository, game.NewCryptoBoardGenerator(), game.MVPWordValidator{}, clock)
+	handler := newTestHTTPHandler(service, Config{InsecureCookies: true, AllowedOrigin: testOrigin, Now: clock})
+	_, aliceCookie := loginLobbyPlayer(t, handler, "Alice")
+	bob, bobCookie := loginLobbyPlayer(t, handler, "Bob")
+	challenge := createAllocationRequest(t, handler, aliceCookie, "expires", "specified", bob.ID, http.StatusCreated)
+	if challenge.ExpiresAt == nil || !challenge.ExpiresAt.Equal(now.Add(7*24*time.Hour)) {
+		t.Fatalf("challenge expiry = %v", challenge.ExpiresAt)
+	}
+
+	now = now.Add(7*24*time.Hour + time.Second)
+	expired := getAllocationRequest(t, handler, bobCookie, challenge.ID, http.StatusOK)
+	if expired.State != "expired" {
+		t.Fatalf("allocation state = %q, want expired", expired.State)
+	}
+	actionAllocationRequest(t, handler, bobCookie, challenge.ID, "accept", http.StatusConflict)
+	deleteAllocationRequest(t, handler, aliceCookie, challenge.ID, http.StatusConflict)
+}
+
+func TestSpecifiedChallengeAcceptCancelRaceHasOneWinner(t *testing.T) {
+	handler, _, _ := newIntegrationHandler(t, true)
+	_, aliceCookie := loginLobbyPlayer(t, handler, "Alice")
+	bob, bobCookie := loginLobbyPlayer(t, handler, "Bob")
+	challenge := createAllocationRequest(t, handler, aliceCookie, "race", "specified", bob.ID, http.StatusCreated)
+
+	start := make(chan struct{})
+	statuses := make(chan int, 2)
+	var workers sync.WaitGroup
+	requests := []struct {
+		method string
+		path   string
+		cookie *http.Cookie
+	}{
+		{http.MethodPost, "/api/v1/game-allocations/" + challenge.ID + "/accept", bobCookie},
+		{http.MethodDelete, "/api/v1/game-allocations/" + challenge.ID, aliceCookie},
+	}
+	for _, candidate := range requests {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			<-start
+			request := newMutationRequest(candidate.method, candidate.path, nil)
+			request.AddCookie(candidate.cookie)
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			statuses <- response.Code
+		}()
+	}
+	close(start)
+	workers.Wait()
+	close(statuses)
+	successes := 0
+	conflicts := 0
+	for status := range statuses {
+		switch status {
+		case http.StatusOK:
+			successes++
+		case http.StatusConflict:
+			conflicts++
+		default:
+			t.Fatalf("race status = %d", status)
+		}
+	}
+	if successes != 1 || conflicts != 1 {
+		t.Fatalf("race successes/conflicts = %d/%d, want 1/1", successes, conflicts)
+	}
+}
+
+func actionAllocationRequest(t *testing.T, handler http.Handler, cookie *http.Cookie, id, action string, status int) app.GameAllocation {
+	t.Helper()
+	request := newMutationRequest(http.MethodPost, "/api/v1/game-allocations/"+id+"/"+action, nil)
+	request.AddCookie(cookie)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if status != http.StatusOK {
+		code := "allocation_not_found"
+		if status == http.StatusConflict {
+			code = "invalid_allocation_state"
+		}
+		assertAPIError(t, response, status, code)
+		return app.GameAllocation{}
+	}
+	if response.Code != status {
+		t.Fatalf("%s allocation status = %d, want %d", action, response.Code, status)
+	}
+	return decodeAllocation(t, response)
+}
+
+func pendingChallenges(t *testing.T, handler http.Handler, cookie *http.Cookie) []app.ChallengeSummary {
+	t.Helper()
+	request := httptest.NewRequest(http.MethodGet, testOrigin+"/api/v1/game-allocations", nil)
+	request.AddCookie(cookie)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("list challenges status = %d; body = %s", response.Code, response.Body.String())
+	}
+	var envelope struct {
+		Data struct {
+			Items []app.ChallengeSummary `json:"items"`
+		} `json:"data"`
+	}
+	decodeResponse(t, response, &envelope)
+	return envelope.Data.Items
+}
+
+func assertPendingChallenge(t *testing.T, handler http.Handler, cookie *http.Cookie, id, direction string) {
+	t.Helper()
+	for _, challenge := range pendingChallenges(t, handler, cookie) {
+		if challenge.AllocationID == id && challenge.Direction == direction {
+			return
+		}
+	}
+	t.Fatalf("pending challenge %q with direction %q not found", id, direction)
+}
+
+func assertNoPendingChallenge(t *testing.T, handler http.Handler, cookie *http.Cookie, id string) {
+	t.Helper()
+	for _, challenge := range pendingChallenges(t, handler, cookie) {
+		if challenge.AllocationID == id {
+			t.Fatalf("terminal challenge %q remains pending", id)
+		}
 	}
 }
 

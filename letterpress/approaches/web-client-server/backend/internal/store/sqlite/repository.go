@@ -81,6 +81,18 @@ type GameAllocation struct {
 	UpdatedAt      time.Time
 }
 
+// SpecifiedChallenge is one pending allocation with public participant names.
+type SpecifiedChallenge struct {
+	AllocationID  string
+	RequesterID   string
+	RequesterName string
+	OpponentID    string
+	OpponentName  string
+	ExpiresAt     time.Time
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+}
+
 // RegisteredPlayer is a durable name-based identity independent of a game.
 type RegisteredPlayer struct {
 	ID             string
@@ -244,6 +256,15 @@ func (repository *Repository) GetRegisteredPlayerBySessionHash(
 	return registeredPlayerFromRow(row), nil
 }
 
+// GetRegisteredPlayerByID resolves a public identity selected for allocation.
+func (repository *Repository) GetRegisteredPlayerByID(ctx context.Context, id string) (RegisteredPlayer, error) {
+	row, err := repository.queries.GetRegisteredPlayerByID(ctx, id)
+	if err != nil {
+		return RegisteredPlayer{}, fmt.Errorf("get registered player by ID: %w", err)
+	}
+	return registeredPlayerFromRow(row), nil
+}
+
 // DeletePlayerSession revokes only the session identified by tokenHash.
 func (repository *Repository) DeletePlayerSession(ctx context.Context, tokenHash [32]byte) error {
 	if _, err := repository.queries.DeletePlayerSession(ctx, tokenHash[:]); err != nil {
@@ -296,7 +317,20 @@ func (repository *Repository) GetGameAllocation(ctx context.Context, id string) 
 
 // CancelGameAllocation moves a requester's nonterminal allocation to cancelled.
 func (repository *Repository) CancelGameAllocation(ctx context.Context, id, requesterID string, updatedAt time.Time) (GameAllocation, error) {
-	rows, err := repository.queries.CancelGameAllocation(ctx, generated.CancelGameAllocationParams{
+	connection, err := repository.database.Conn(ctx)
+	if err != nil {
+		return GameAllocation{}, fmt.Errorf("acquire cancellation connection: %w", err)
+	}
+	defer connection.Close()
+	if _, err := connection.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+		return GameAllocation{}, fmt.Errorf("begin cancellation transaction: %w", err)
+	}
+	defer func() { _, _ = connection.ExecContext(context.Background(), "ROLLBACK") }()
+	queries := generated.New(connection)
+	if _, err := queries.ExpireGameAllocation(ctx, generated.ExpireGameAllocationParams{Now: updatedAt, ID: id}); err != nil {
+		return GameAllocation{}, fmt.Errorf("expire allocation before cancellation: %w", err)
+	}
+	rows, err := queries.CancelGameAllocation(ctx, generated.CancelGameAllocationParams{
 		UpdatedAt: updatedAt, ID: id, RequesterID: requesterID,
 	})
 	if err != nil {
@@ -305,7 +339,78 @@ func (repository *Repository) CancelGameAllocation(ctx context.Context, id, requ
 	if rows != 1 {
 		return GameAllocation{}, ErrAllocationTransition
 	}
+	row, err := queries.GetGameAllocation(ctx, id)
+	if err != nil {
+		return GameAllocation{}, fmt.Errorf("get cancelled allocation: %w", err)
+	}
+	if _, err := connection.ExecContext(ctx, "COMMIT"); err != nil {
+		return GameAllocation{}, fmt.Errorf("commit allocation cancellation: %w", err)
+	}
+	return allocationFromRow(row), nil
+}
+
+// RefreshGameAllocation applies lazy expiry and returns the observable state.
+func (repository *Repository) RefreshGameAllocation(ctx context.Context, id string, now time.Time) (GameAllocation, error) {
+	if _, err := repository.queries.ExpireGameAllocation(ctx, generated.ExpireGameAllocationParams{Now: now, ID: id}); err != nil {
+		return GameAllocation{}, fmt.Errorf("expire game allocation: %w", err)
+	}
 	return repository.GetGameAllocation(ctx, id)
+}
+
+// DeclineSpecifiedAllocation lets only the intended opponent decline a live challenge.
+func (repository *Repository) DeclineSpecifiedAllocation(ctx context.Context, id, opponentID string, now time.Time) (GameAllocation, error) {
+	connection, err := repository.database.Conn(ctx)
+	if err != nil {
+		return GameAllocation{}, fmt.Errorf("acquire decline connection: %w", err)
+	}
+	defer connection.Close()
+	if _, err := connection.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+		return GameAllocation{}, fmt.Errorf("begin decline transaction: %w", err)
+	}
+	defer func() { _, _ = connection.ExecContext(context.Background(), "ROLLBACK") }()
+	queries := generated.New(connection)
+	if _, err := queries.ExpireGameAllocation(ctx, generated.ExpireGameAllocationParams{Now: now, ID: id}); err != nil {
+		return GameAllocation{}, fmt.Errorf("expire allocation before decline: %w", err)
+	}
+	rows, err := queries.DeclineSpecifiedAllocation(ctx, generated.DeclineSpecifiedAllocationParams{
+		UpdatedAt: now, ID: id, OpponentID: nullableString(opponentID),
+	})
+	if err != nil {
+		return GameAllocation{}, fmt.Errorf("decline specified allocation: %w", err)
+	}
+	if rows != 1 {
+		return GameAllocation{}, ErrAllocationTransition
+	}
+	row, err := queries.GetGameAllocation(ctx, id)
+	if err != nil {
+		return GameAllocation{}, fmt.Errorf("get declined allocation: %w", err)
+	}
+	if _, err := connection.ExecContext(ctx, "COMMIT"); err != nil {
+		return GameAllocation{}, fmt.Errorf("commit allocation decline: %w", err)
+	}
+	return allocationFromRow(row), nil
+}
+
+// ListPendingSpecifiedChallenges returns a bounded participant-scoped feed.
+func (repository *Repository) ListPendingSpecifiedChallenges(ctx context.Context, playerID string, now time.Time, limit int) ([]SpecifiedChallenge, error) {
+	if _, err := repository.queries.ExpireDueGameAllocations(ctx, now); err != nil {
+		return nil, fmt.Errorf("expire due allocations: %w", err)
+	}
+	rows, err := repository.queries.ListPendingSpecifiedChallenges(ctx, generated.ListPendingSpecifiedChallengesParams{
+		Now: nullableTime(&now), PlayerID: playerID, ResultLimit: int64(limit),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list specified challenges: %w", err)
+	}
+	items := make([]SpecifiedChallenge, 0, len(rows))
+	for _, row := range rows {
+		items = append(items, SpecifiedChallenge{
+			AllocationID: row.ID, RequesterID: row.RequesterID, RequesterName: row.RequesterName,
+			OpponentID: row.OpponentID.String, OpponentName: row.OpponentName,
+			ExpiresAt: row.ExpiresAt.Time, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
+		})
+	}
+	return items, nil
 }
 
 // CompleteGameAllocation atomically creates one game and assigns deterministic seats.
@@ -331,6 +436,16 @@ func (repository *Repository) CompleteGameAllocation(
 		return GameAllocation{}, fmt.Errorf("get allocation for completion: %w", err)
 	}
 	allocation := allocationFromRow(row)
+	if allocation.ExpiresAt != nil && !game.UpdatedAt.Before(*allocation.ExpiresAt) &&
+		(allocation.State == "pending_acceptance" || allocation.State == "queued") {
+		if _, err := queries.ExpireGameAllocation(ctx, generated.ExpireGameAllocationParams{Now: game.UpdatedAt, ID: allocationID}); err != nil {
+			return GameAllocation{}, fmt.Errorf("expire allocation before completion: %w", err)
+		}
+		if _, err := connection.ExecContext(ctx, "COMMIT"); err != nil {
+			return GameAllocation{}, fmt.Errorf("commit allocation expiry: %w", err)
+		}
+		return GameAllocation{}, ErrAllocationTransition
+	}
 	if allocation.State == "allocated" {
 		if _, err := connection.ExecContext(ctx, "COMMIT"); err != nil {
 			return GameAllocation{}, fmt.Errorf("commit idempotent completion: %w", err)

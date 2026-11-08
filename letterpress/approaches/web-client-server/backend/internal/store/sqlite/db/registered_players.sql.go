@@ -70,6 +70,24 @@ func (q *Queries) DeletePlayerSession(ctx context.Context, tokenHash []byte) (in
 	return result.RowsAffected()
 }
 
+const getRegisteredPlayerByID = `-- name: GetRegisteredPlayerByID :one
+SELECT id, display_name, normalized_name, created_at
+FROM registered_players
+WHERE id = ?
+`
+
+func (q *Queries) GetRegisteredPlayerByID(ctx context.Context, id string) (RegisteredPlayer, error) {
+	row := q.db.QueryRowContext(ctx, getRegisteredPlayerByID, id)
+	var i RegisteredPlayer
+	err := row.Scan(
+		&i.ID,
+		&i.DisplayName,
+		&i.NormalizedName,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const getRegisteredPlayerByNormalizedName = `-- name: GetRegisteredPlayerByNormalizedName :one
 SELECT id, display_name, normalized_name, created_at
 FROM registered_players

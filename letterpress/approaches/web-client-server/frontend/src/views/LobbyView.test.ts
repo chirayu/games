@@ -8,7 +8,8 @@ import {
 import LobbyView from "./LobbyView.vue";
 
 const replace = vi.fn();
-vi.mock("vue-router", () => ({ useRouter: () => ({ replace }) }));
+const push = vi.fn();
+vi.mock("vue-router", () => ({ useRouter: () => ({ replace, push }) }));
 
 function response(status: number, body?: unknown) {
   return { ok: status >= 200 && status < 300, status, json: async () => body };
@@ -56,6 +57,7 @@ describe("LobbyView", () => {
   beforeEach(() => {
     resetPlayerSessionForTests();
     replace.mockReset();
+    push.mockReset();
     vi.unstubAllGlobals();
   });
 
@@ -65,7 +67,8 @@ describe("LobbyView", () => {
       .mockResolvedValueOnce(
         response(200, { data: { id: "p1", name: "Alice" } }),
       )
-      .mockResolvedValueOnce(response(200, activeGames));
+      .mockResolvedValueOnce(response(200, activeGames))
+      .mockResolvedValueOnce(response(200, { data: { items: [] } }));
     await establishAlice(fetchMock);
     const wrapper = mountLobby();
     await flushPromises();
@@ -84,6 +87,7 @@ describe("LobbyView", () => {
       .mockResolvedValueOnce(
         response(200, { data: { id: "p1", name: "Alice" } }),
       )
+      .mockResolvedValueOnce(response(200, { data: { items: [] } }))
       .mockResolvedValueOnce(response(200, { data: { items: [] } }))
       .mockResolvedValueOnce(
         response(200, {
@@ -109,7 +113,8 @@ describe("LobbyView", () => {
       )
       .mockResolvedValueOnce(
         response(401, { error: { code: "player_session_required" } }),
-      );
+      )
+      .mockResolvedValueOnce(response(200, { data: { items: [] } }));
     await establishAlice(staleFetch);
     const stale = mountLobby();
     await flushPromises();
@@ -121,12 +126,49 @@ describe("LobbyView", () => {
       .mockResolvedValueOnce(
         response(200, { data: { id: "p1", name: "Alice" } }),
       )
-      .mockRejectedValueOnce(new Error("offline"));
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValueOnce(response(200, { data: { items: [] } }));
     await establishAlice(failedFetch);
     const failed = mountLobby();
     await flushPromises();
     expect(failed.text()).toContain("Your games couldn’t be loaded");
     expect(failed.text()).toContain("Try again");
+  });
+
+  it("accepts an incoming challenge and opens the allocated game", async () => {
+    const challenge = {
+      allocationId: "allocation-1",
+      direction: "incoming",
+      requester: { id: "p2", name: "Bob", type: "human" },
+      opponent: { id: "p1", name: "Alice", type: "human" },
+      expiresAt: "2026-11-15T12:00:00Z",
+      createdAt: "2026-11-08T12:00:00Z",
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        response(200, { data: { id: "p1", name: "Alice" } }),
+      )
+      .mockResolvedValueOnce(response(200, { data: { items: [] } }))
+      .mockResolvedValueOnce(response(200, { data: { items: [challenge] } }))
+      .mockResolvedValueOnce(
+        response(200, {
+          data: { id: "allocation-1", state: "allocated", gameId: "game-1" },
+        }),
+      );
+    await establishAlice(fetchMock);
+    const wrapper = mountLobby();
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("Incoming challenges");
+    await wrapper.get(".challenge-list .primary-action").trigger("click");
+    await flushPromises();
+
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "/api/v1/game-allocations/allocation-1/accept",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(push).toHaveBeenCalledWith("/games/game-1");
   });
 
   it("logs out the current browser session and returns to name entry", async () => {
@@ -135,6 +177,7 @@ describe("LobbyView", () => {
       .mockResolvedValueOnce(
         response(200, { data: { id: "p1", name: "Alice" } }),
       )
+      .mockResolvedValueOnce(response(200, { data: { items: [] } }))
       .mockResolvedValueOnce(response(200, { data: { items: [] } }))
       .mockResolvedValueOnce(response(204));
     await establishAlice(fetchMock);

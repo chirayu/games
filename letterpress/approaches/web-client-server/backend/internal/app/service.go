@@ -37,10 +37,14 @@ type Store interface {
 	Health(context.Context) error
 	CreateRegisteredPlayerSession(context.Context, sqlite.RegisteredPlayer, sqlite.PlayerSession) (sqlite.RegisteredPlayer, bool, error)
 	GetRegisteredPlayerBySessionHash(context.Context, [32]byte, time.Time) (sqlite.RegisteredPlayer, error)
+	GetRegisteredPlayerByID(context.Context, string) (sqlite.RegisteredPlayer, error)
 	DeletePlayerSession(context.Context, [32]byte) error
 	CreateGameAllocation(context.Context, sqlite.GameAllocation) (sqlite.GameAllocation, bool, error)
 	GetGameAllocation(context.Context, string) (sqlite.GameAllocation, error)
+	RefreshGameAllocation(context.Context, string, time.Time) (sqlite.GameAllocation, error)
 	CancelGameAllocation(context.Context, string, string, time.Time) (sqlite.GameAllocation, error)
+	DeclineSpecifiedAllocation(context.Context, string, string, time.Time) (sqlite.GameAllocation, error)
+	ListPendingSpecifiedChallenges(context.Context, string, time.Time, int) ([]sqlite.SpecifiedChallenge, error)
 	CompleteGameAllocation(context.Context, string, string, sqlite.Game, [2]sqlite.GameSeat) (sqlite.GameAllocation, error)
 	CreateGame(context.Context, sqlite.Game, [2]sqlite.GameSeat) error
 	GetGame(context.Context, string) (sqlite.Game, error)

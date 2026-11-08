@@ -93,9 +93,8 @@ the UI explicitly warns that knowing a name is sufficient to use that identity.
 
 Each game has exactly two `game_seats`. A seat links its numbered game role to
 a durable registered-player ID; it contains no credential. Game allocation is
-the only intended creator of games and assigns two distinct registered players
-when it calls the application service. Its public REST API is introduced by a
-later ticket, so there is currently no public game-creation endpoint.
+the only creator of games and assigns two distinct registered players when it
+calls the application service. There is no public direct game-creation endpoint.
 
 The migration from invitation capabilities is deliberately destructive. It
 purges all invitation-era games and move history, drops the legacy `players`
@@ -132,8 +131,10 @@ directory.
 
 The lobby groups summaries by whether the active seat is the player's seat,
 links each row to the authoritative game view, and provides empty, loading,
-expired-session, and retry states. Player discovery records retain their IDs for
-the later challenge-allocation flow.
+expired-session, and retry states. Player search results can create specified
+challenges. Incoming and outgoing challenges expose only the actions authorized
+for that player, and the lobby refreshes them on load, focus, and visibility.
+Successful acceptance navigates directly to the authoritative game.
 
 ## Durable game allocation
 
@@ -154,6 +155,14 @@ begin queued. Bot selection is not implemented yet.
 opponent. Unrelated players receive the same not-found response as an unknown
 allocation. `DELETE` lets only the requester cancel a pending or queued
 allocation. State-changing requests retain same-origin enforcement.
+
+Specified-player allocations expire seven days after creation. Expiry is
+applied lazily and atomically whenever an allocation is read, listed, cancelled,
+declined, or accepted, so an expired challenge cannot race into a game.
+`GET /api/v1/game-allocations` lists the authenticated player's live incoming
+and outgoing specified challenges. Only the intended opponent may `POST` to
+`/{id}/accept` or `/{id}/decline`; accepting creates exactly one game, while the
+requester may cancel with `DELETE /{id}` until another terminal transition wins.
 
 Completion runs in an immediate SQLite transaction. It locks and rechecks the
 allocation, creates the game and both seats, and attaches the game ID before
