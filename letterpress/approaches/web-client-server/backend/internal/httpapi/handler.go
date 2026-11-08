@@ -19,6 +19,8 @@ import (
 
 const sessionLifetime = 180 * 24 * time.Hour
 
+const playerSessionCookieName = "letterpress_player_session"
+
 // Config controls security-sensitive HTTP behavior.
 type Config struct {
 	InsecureCookies bool
@@ -36,6 +38,9 @@ func NewHandler(service *app.Service, config Config) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", health)
 	mux.HandleFunc("GET /readyz", handler.ready)
+	mux.HandleFunc("POST /api/v1/player-sessions", handler.enterPlayer)
+	mux.HandleFunc("DELETE /api/v1/player-sessions/current", handler.logoutPlayer)
+	mux.HandleFunc("GET /api/v1/players/me", handler.currentPlayer)
 	mux.HandleFunc("POST /api/v1/games", handler.createGame)
 	mux.HandleFunc("GET /api/v1/games/{gameID}", handler.getGame)
 	mux.HandleFunc("POST /api/v1/games/{gameID}/sessions", handler.exchangeSession)
@@ -92,6 +97,97 @@ func (handler *handler) frontend(response http.ResponseWriter, request *http.Req
 		response.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	}
 	http.ServeContent(response, request, requested, time.Time{}, bytes.NewReader(content))
+}
+
+func (handler *handler) enterPlayer(response http.ResponseWriter, request *http.Request) {
+	response.Header().Set("Cache-Control", "no-store")
+	if !handler.validOrigin(request) {
+		writeError(response, http.StatusForbidden, "invalid_origin", "request origin is not allowed")
+		return
+	}
+	var input struct {
+		Name string `json:"name"`
+	}
+	decoder := json.NewDecoder(http.MaxBytesReader(response, request.Body, 4096))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil {
+		writeError(response, http.StatusBadRequest, "invalid_request", "a player name is required")
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		writeError(response, http.StatusBadRequest, "invalid_request", "request body must contain one JSON object")
+		return
+	}
+
+	login, err := handler.service.EnterPlayer(request.Context(), input.Name)
+	if errors.Is(err, app.ErrInvalidPlayerName) {
+		writeError(response, http.StatusUnprocessableEntity, "invalid_player_name", "name must be 1–24 characters using letters, numbers, spaces, hyphens, or underscores")
+		return
+	}
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "internal_error", "could not establish player session")
+		return
+	}
+	handler.setPlayerSessionCookie(response, login.Token, login.ExpiresAt, int(sessionLifetime.Seconds()))
+	status := http.StatusOK
+	if login.Created {
+		status = http.StatusCreated
+	}
+	writeJSON(response, status, map[string]any{"data": login.Player})
+}
+
+func (handler *handler) currentPlayer(response http.ResponseWriter, request *http.Request) {
+	response.Header().Set("Cache-Control", "no-store")
+	player, err := handler.service.CurrentPlayer(request.Context(), handler.playerSessionToken(request))
+	if errors.Is(err, app.ErrInvalidPlayerSession) {
+		writeError(response, http.StatusUnauthorized, "player_session_required", "a valid player session is required")
+		return
+	}
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "internal_error", "could not load player session")
+		return
+	}
+	writeJSON(response, http.StatusOK, map[string]any{"data": player})
+}
+
+func (handler *handler) logoutPlayer(response http.ResponseWriter, request *http.Request) {
+	response.Header().Set("Cache-Control", "no-store")
+	if !handler.validOrigin(request) {
+		writeError(response, http.StatusForbidden, "invalid_origin", "request origin is not allowed")
+		return
+	}
+	err := handler.service.LogoutPlayer(request.Context(), handler.playerSessionToken(request))
+	handler.setPlayerSessionCookie(response, "", time.Unix(1, 0).UTC(), -1)
+	if errors.Is(err, app.ErrInvalidPlayerSession) {
+		writeError(response, http.StatusUnauthorized, "player_session_required", "a valid player session is required")
+		return
+	}
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "internal_error", "could not end player session")
+		return
+	}
+	response.WriteHeader(http.StatusNoContent)
+}
+
+func (handler *handler) playerSessionToken(request *http.Request) string {
+	cookie, err := request.Cookie(playerSessionCookieName)
+	if err != nil {
+		return ""
+	}
+	return cookie.Value
+}
+
+func (handler *handler) setPlayerSessionCookie(
+	response http.ResponseWriter,
+	value string,
+	expires time.Time,
+	maxAge int,
+) {
+	http.SetCookie(response, &http.Cookie{
+		Name: playerSessionCookieName, Value: value, Path: "/",
+		Expires: expires, MaxAge: maxAge, HttpOnly: true,
+		Secure: !handler.config.InsecureCookies, SameSite: http.SameSiteLaxMode,
+	})
 }
 
 func (handler *handler) createGame(response http.ResponseWriter, request *http.Request) {

@@ -12,8 +12,13 @@ type Querier interface {
 	CreateGame(ctx context.Context, arg CreateGameParams) error
 	CreateMove(ctx context.Context, arg CreateMoveParams) error
 	CreatePlayer(ctx context.Context, arg CreatePlayerParams) error
+	CreatePlayerSession(ctx context.Context, arg CreatePlayerSessionParams) error
+	CreateRegisteredPlayer(ctx context.Context, arg CreateRegisteredPlayerParams) (int64, error)
+	DeletePlayerSession(ctx context.Context, tokenHash []byte) (int64, error)
 	GetGame(ctx context.Context, id string) (Game, error)
 	GetPlayerByTokenHash(ctx context.Context, arg GetPlayerByTokenHashParams) (Player, error)
+	GetRegisteredPlayerByNormalizedName(ctx context.Context, normalizedName string) (RegisteredPlayer, error)
+	GetRegisteredPlayerBySessionHash(ctx context.Context, arg GetRegisteredPlayerBySessionHashParams) (RegisteredPlayer, error)
 	ListMoves(ctx context.Context, gameID string) ([]Move, error)
 	ListPlayers(ctx context.Context, gameID string) ([]Player, error)
 	UpdateGameState(ctx context.Context, arg UpdateGameStateParams) (int64, error)

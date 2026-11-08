@@ -24,12 +24,20 @@ ticket intentionally changes one.
 6. **MVP board generation.** Generate each position independently and uniformly
    from A–Z. Letters behave literally. Alternative generators plug into
    `BoardGenerator`.
-7. **Player identity.** Use separate capability links and game-scoped secure
-   cookies rather than user accounts. Store hashes of invitation secrets only.
+7. **Player identity.** Use a stable registered-player record with a unique,
+   case-insensitive name. Name entry is intentionally both registration and
+   login from any browser, with no password or ownership proof. Each login gets
+   an independent application-wide secure cookie backed by a stored token hash;
+   logout revokes only that session. Anyone who knows a name can impersonate
+   that player, an accepted limitation for the current private deployment.
+   Legacy invitation capabilities coexist only during the staged migration to
+   registered game seats and are not the target identity model.
 8. **Asynchronous refresh.** Fetch on load and focus; poll every 30 seconds only
    while visible and waiting. Version checks resolve stale clients.
-9. **Retention.** Keep games indefinitely for the MVP and use 180-day player
-   cookies. Reopening a private link can restore a session.
+9. **Retention.** Keep games indefinitely for the MVP and use 180-day
+   registered-player sessions. Each browser login is independently revocable.
+   Legacy game cookies retain their existing lifetime only until invitation
+   authentication is removed.
 10. **Deployment target.** Produce a provider-neutral OCI container, durable
     SQLite volume guidance, and GitHub Actions validation. Selecting and
     provisioning a hosting provider is a later decision.

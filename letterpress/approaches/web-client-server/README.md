@@ -34,6 +34,18 @@ cd approaches/web-client-server/backend
 ./internal/game/dictionary/generate.sh
 ```
 
+## Player identity
+
+The backend supports name-only registered-player sessions. Entering a new name
+registers it; entering an existing name from any browser logs in to that same
+player. There is deliberately no password or ownership verification yet, so
+anyone who knows a player name can access that identity. Each browser receives
+an independent secure session and can log out without affecting other sessions.
+
+This identity API currently coexists with the invitation-based game flow. The
+following migration work will replace game invitations with registered-player
+membership and allocation; new UI for name entry is tracked separately.
+
 ## Layout
 
 ```text
@@ -124,7 +136,8 @@ use cryptographically secure random letters.
 
 ## Development status
 
-The pure Go game engine, SQLite persistence layer, secure game creation and
+The pure Go game engine, SQLite persistence layer, name-only registered-player
+sessions, secure game creation and
 invitation flow, authenticated responsive board, transactional move submission,
 multi-day focus/visibility refresh and polling, recoverable local move drafts,
 server-authoritative English dictionary validation, final results and move

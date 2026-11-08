@@ -59,7 +59,37 @@ put file databases in WAL mode. Games contain the current board state while
 moves form the immutable turn history; inserting a move and advancing the
 versioned state share one transaction.
 
-## Invitations and sessions
+## Registered players and sessions
+
+A registered player has a stable random ID, a preserved display name, and a
+case-insensitive normalized name. Names contain 1–24 ASCII letters, numbers,
+spaces, hyphens, or underscores; surrounding spaces are removed and repeated
+spaces collapse to one. The normalized name is unique.
+
+`POST /api/v1/player-sessions` is intentionally both registration and login. A
+new normalized name creates the player, while an existing normalized name logs
+in to the original player from any browser. There is no password, verification,
+or proof of ownership: anyone who enters a known player name can act as that
+player. This limitation is accepted for the current private deployment and
+must be stated in the UI. A later identity system can strengthen login without
+changing game rules.
+
+Each successful name entry creates a separate 32-byte random session secret.
+Only its SHA-256 hash is stored. The raw value is set in the application-wide
+`letterpress_player_session` cookie with `HttpOnly`, `Secure`, `SameSite=Lax`,
+and a 180-day lifetime. `GET /api/v1/players/me` restores the current identity.
+`DELETE /api/v1/player-sessions/current` revokes only the presented session and
+clears its cookie, so logging out one browser does not affect another browser
+logged in with the same name. State-changing session requests require a
+matching browser origin.
+
+Registered-player identity is being introduced before game membership changes.
+Until the following migration replaces game seats, the existing game endpoints
+continue to use the legacy invitation capabilities described below. The two
+credential types are stored separately and a registered-player session does
+not grant access to a legacy game.
+
+## Legacy invitations and game sessions
 
 Game creation generates separate 32-byte random secrets for the two player
 seats. Only SHA-256 hashes of those secrets are stored. Each invitation places
@@ -110,9 +140,9 @@ opponent it polls every 30 seconds; it stops the timer while hidden. A selected,
 unsubmitted move is saved in browser-local storage with the game ID and version
 so a transient network error or browser restart does not discard it. The draft
 is removed after success and discarded with an explanation if the server
-version changes. Games have no automatic expiry in the MVP, while the
-game-scoped HttpOnly player cookie lasts 180 days and can be restored from the
-private invitation link.
+version changes. Games have no automatic expiry in the MVP. Registered-player
+sessions and the legacy game-scoped cookies last 180 days; only the registered
+player session supports name-based login from another browser.
 
 ## Production shape
 

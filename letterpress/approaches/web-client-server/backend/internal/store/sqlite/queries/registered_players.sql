@@ -1,0 +1,22 @@
+-- name: CreateRegisteredPlayer :execrows
+INSERT OR IGNORE INTO registered_players (id, display_name, normalized_name, created_at)
+VALUES (?, ?, ?, ?);
+
+-- name: GetRegisteredPlayerByNormalizedName :one
+SELECT id, display_name, normalized_name, created_at
+FROM registered_players
+WHERE normalized_name = ?;
+
+-- name: CreatePlayerSession :exec
+INSERT INTO player_sessions (token_hash, player_id, expires_at, created_at)
+VALUES (?, ?, ?, ?);
+
+-- name: GetRegisteredPlayerBySessionHash :one
+SELECT p.id, p.display_name, p.normalized_name, p.created_at
+FROM player_sessions AS s
+JOIN registered_players AS p ON p.id = s.player_id
+WHERE s.token_hash = ? AND s.expires_at > ?;
+
+-- name: DeletePlayerSession :execrows
+DELETE FROM player_sessions
+WHERE token_hash = ?;

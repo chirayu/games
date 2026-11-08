@@ -49,6 +49,23 @@ type Player struct {
 	CreatedAt time.Time
 }
 
+// RegisteredPlayer is a durable name-based identity independent of a game.
+type RegisteredPlayer struct {
+	ID             string
+	DisplayName    string
+	NormalizedName string
+	CreatedAt      time.Time
+}
+
+// PlayerSession is one independently revocable registered-player session.
+// TokenHash is the only credential persisted.
+type PlayerSession struct {
+	TokenHash [32]byte
+	PlayerID  string
+	ExpiresAt time.Time
+	CreatedAt time.Time
+}
+
 // Move is an accepted move in turn order.
 type Move struct {
 	ID          int64
@@ -134,6 +151,71 @@ func (repository *Repository) Close() error {
 func (repository *Repository) Health(ctx context.Context) error {
 	if err := repository.database.PingContext(ctx); err != nil {
 		return fmt.Errorf("ping sqlite database: %w", err)
+	}
+	return nil
+}
+
+// CreateRegisteredPlayerSession atomically finds or creates a player by
+// normalized name and records a new independent session for that identity.
+func (repository *Repository) CreateRegisteredPlayerSession(
+	ctx context.Context,
+	candidate RegisteredPlayer,
+	session PlayerSession,
+) (RegisteredPlayer, bool, error) {
+	connection, err := repository.database.Conn(ctx)
+	if err != nil {
+		return RegisteredPlayer{}, false, fmt.Errorf("acquire player session connection: %w", err)
+	}
+	defer connection.Close()
+	if _, err := connection.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+		return RegisteredPlayer{}, false, fmt.Errorf("begin player session transaction: %w", err)
+	}
+	defer func() { _, _ = connection.ExecContext(context.Background(), "ROLLBACK") }()
+	queries := generated.New(connection)
+
+	rows, err := queries.CreateRegisteredPlayer(ctx, generated.CreateRegisteredPlayerParams{
+		ID: candidate.ID, DisplayName: candidate.DisplayName,
+		NormalizedName: candidate.NormalizedName, CreatedAt: candidate.CreatedAt,
+	})
+	if err != nil {
+		return RegisteredPlayer{}, false, fmt.Errorf("create registered player: %w", err)
+	}
+	row, err := queries.GetRegisteredPlayerByNormalizedName(ctx, candidate.NormalizedName)
+	if err != nil {
+		return RegisteredPlayer{}, false, fmt.Errorf("get registered player: %w", err)
+	}
+	player := registeredPlayerFromRow(row)
+	if err := queries.CreatePlayerSession(ctx, generated.CreatePlayerSessionParams{
+		TokenHash: session.TokenHash[:], PlayerID: player.ID,
+		ExpiresAt: session.ExpiresAt, CreatedAt: session.CreatedAt,
+	}); err != nil {
+		return RegisteredPlayer{}, false, fmt.Errorf("create player session: %w", err)
+	}
+	if _, err := connection.ExecContext(ctx, "COMMIT"); err != nil {
+		return RegisteredPlayer{}, false, fmt.Errorf("commit player session transaction: %w", err)
+	}
+	return player, rows == 1, nil
+}
+
+// GetRegisteredPlayerBySessionHash authenticates one unexpired session.
+func (repository *Repository) GetRegisteredPlayerBySessionHash(
+	ctx context.Context,
+	tokenHash [32]byte,
+	now time.Time,
+) (RegisteredPlayer, error) {
+	row, err := repository.queries.GetRegisteredPlayerBySessionHash(ctx, generated.GetRegisteredPlayerBySessionHashParams{
+		TokenHash: tokenHash[:], ExpiresAt: now,
+	})
+	if err != nil {
+		return RegisteredPlayer{}, fmt.Errorf("get registered player by session hash: %w", err)
+	}
+	return registeredPlayerFromRow(row), nil
+}
+
+// DeletePlayerSession revokes only the session identified by tokenHash.
+func (repository *Repository) DeletePlayerSession(ctx context.Context, tokenHash [32]byte) error {
+	if _, err := repository.queries.DeletePlayerSession(ctx, tokenHash[:]); err != nil {
+		return fmt.Errorf("delete player session: %w", err)
 	}
 	return nil
 }
@@ -405,4 +487,11 @@ func (repository *Repository) ListMoves(ctx context.Context, gameID string) ([]M
 
 func cloneBytes(value []byte) []byte {
 	return append([]byte(nil), value...)
+}
+
+func registeredPlayerFromRow(row generated.RegisteredPlayer) RegisteredPlayer {
+	return RegisteredPlayer{
+		ID: row.ID, DisplayName: row.DisplayName,
+		NormalizedName: row.NormalizedName, CreatedAt: row.CreatedAt,
+	}
 }

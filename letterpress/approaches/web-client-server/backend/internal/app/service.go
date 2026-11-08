@@ -17,8 +17,9 @@ import (
 )
 
 const (
-	gameIDBytes = 16
-	secretBytes = 32
+	gameIDBytes   = 16
+	playerIDBytes = 16
+	secretBytes   = 32
 )
 
 // ErrInvalidSecret means an invitation secret is malformed or does not belong
@@ -37,6 +38,9 @@ var (
 // Store is the persistence needed by the application service.
 type Store interface {
 	Health(context.Context) error
+	CreateRegisteredPlayerSession(context.Context, sqlite.RegisteredPlayer, sqlite.PlayerSession) (sqlite.RegisteredPlayer, bool, error)
+	GetRegisteredPlayerBySessionHash(context.Context, [32]byte, time.Time) (sqlite.RegisteredPlayer, error)
+	DeletePlayerSession(context.Context, [32]byte) error
 	CreateGame(context.Context, sqlite.Game, [2]sqlite.Player) error
 	GetGame(context.Context, string) (sqlite.Game, error)
 	ListMoves(context.Context, string) ([]sqlite.Move, error)
@@ -127,7 +131,21 @@ func NewServiceWithBoardGenerator(store Store, generator game.BoardGenerator) *S
 // NewServiceWithDependencies allows focused tests to supply deterministic
 // generation and validation strategies.
 func NewServiceWithDependencies(store Store, generator game.BoardGenerator, validator game.WordValidator) *Service {
-	return &Service{store: store, random: rand.Reader, now: time.Now, generator: generator, validator: validator}
+	return NewServiceWithDependenciesAndClock(store, generator, validator, time.Now)
+}
+
+// NewServiceWithDependenciesAndClock allows HTTP and persistence tests to use
+// one deterministic clock for sessions and game operations.
+func NewServiceWithDependenciesAndClock(
+	store Store,
+	generator game.BoardGenerator,
+	validator game.WordValidator,
+	now func() time.Time,
+) *Service {
+	if now == nil {
+		now = time.Now
+	}
+	return &Service{store: store, random: rand.Reader, now: now, generator: generator, validator: validator}
 }
 
 // Ready checks whether the authoritative store can serve requests.
@@ -391,6 +409,10 @@ func (service *Service) randomTokenBytes(size int) (string, []byte, error) {
 }
 
 func invitationHash(token string) ([32]byte, bool) {
+	return credentialHash(token)
+}
+
+func credentialHash(token string) ([32]byte, bool) {
 	secret, err := base64.RawURLEncoding.DecodeString(token)
 	if err != nil || len(secret) != secretBytes {
 		return [32]byte{}, false

@@ -570,11 +570,15 @@ func newIntegrationHandler(t *testing.T, secureCookies bool) (http.Handler, *sql
 	}
 	t.Cleanup(func() { _ = repository.Close() })
 	now := time.Date(2026, time.October, 31, 9, 0, 0, 0, time.UTC)
-	return NewHandler(testService(repository), Config{InsecureCookies: !secureCookies, Now: func() time.Time { return now }}), repository, now
+	return NewHandler(testServiceAt(repository, func() time.Time { return now }), Config{InsecureCookies: !secureCookies, Now: func() time.Time { return now }}), repository, now
 }
 
 func testService(repository *sqlite.Repository) *app.Service {
 	return app.NewServiceWithDependencies(repository, game.NewCryptoBoardGenerator(), game.MVPWordValidator{})
+}
+
+func testServiceAt(repository *sqlite.Repository, now func() time.Time) *app.Service {
+	return app.NewServiceWithDependenciesAndClock(repository, game.NewCryptoBoardGenerator(), game.MVPWordValidator{}, now)
 }
 
 func newDictionaryIntegrationHandler(t *testing.T, databasePath string) (http.Handler, *sqlite.Repository) {

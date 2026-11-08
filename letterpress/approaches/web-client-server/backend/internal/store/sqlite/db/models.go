@@ -35,3 +35,17 @@ type Player struct {
 	TokenHash []byte    `json:"token_hash"`
 	CreatedAt time.Time `json:"created_at"`
 }
+
+type PlayerSession struct {
+	TokenHash []byte    `json:"token_hash"`
+	PlayerID  string    `json:"player_id"`
+	ExpiresAt time.Time `json:"expires_at"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+type RegisteredPlayer struct {
+	ID             string    `json:"id"`
+	DisplayName    string    `json:"display_name"`
+	NormalizedName string    `json:"normalized_name"`
+	CreatedAt      time.Time `json:"created_at"`
+}
