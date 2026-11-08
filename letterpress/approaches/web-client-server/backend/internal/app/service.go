@@ -42,6 +42,8 @@ type Store interface {
 	GetGame(context.Context, string) (sqlite.Game, error)
 	ListMoves(context.Context, string) ([]sqlite.Move, error)
 	GetGameSeatByPlayer(context.Context, string, string) (sqlite.GameSeat, error)
+	ListActiveGamesForPlayer(context.Context, string, time.Time, string, int) ([]sqlite.ActiveGameSummary, error)
+	SearchRegisteredPlayers(context.Context, string, string, string, string, int) ([]sqlite.RegisteredPlayer, error)
 	TransactMove(context.Context, string, string, int64, sqlite.MoveOperation) error
 }
 

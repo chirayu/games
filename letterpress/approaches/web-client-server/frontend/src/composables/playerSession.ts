@@ -45,6 +45,11 @@ export async function endPlayerSession(): Promise<void> {
   restored = true;
 }
 
+export function clearPlayerSession(): void {
+  player.value = null;
+  restored = true;
+}
+
 export function usePlayerSession() {
   return {
     player: readonly(player),

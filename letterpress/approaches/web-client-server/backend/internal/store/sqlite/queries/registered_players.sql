@@ -20,3 +20,15 @@ WHERE s.token_hash = ? AND s.expires_at > ?;
 -- name: DeletePlayerSession :execrows
 DELETE FROM player_sessions
 WHERE token_hash = ?;
+
+-- name: SearchRegisteredPlayers :many
+SELECT id, display_name, normalized_name, created_at
+FROM registered_players
+WHERE id != sqlc.arg(excluded_player_id)
+  AND instr(normalized_name, sqlc.arg(name_fragment)) > 0
+  AND (
+      normalized_name > sqlc.arg(cursor_name)
+      OR (normalized_name = sqlc.arg(cursor_name) AND id > sqlc.arg(cursor_id))
+  )
+ORDER BY normalized_name ASC, id ASC
+LIMIT sqlc.arg(result_limit);

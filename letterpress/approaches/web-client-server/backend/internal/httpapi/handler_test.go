@@ -135,11 +135,17 @@ func TestAssignedGamePersistsRegisteredPlayerSeats(t *testing.T) {
 
 func TestLegacyCreationAndInvitationRoutesAreUnavailable(t *testing.T) {
 	handler, _, _ := newIntegrationHandler(t, false)
-	for _, target := range []string{"/api/v1/games", "/api/v1/games/unknown/sessions"} {
+	for _, test := range []struct {
+		target string
+		status int
+	}{
+		{target: "/api/v1/games", status: http.StatusMethodNotAllowed},
+		{target: "/api/v1/games/unknown/sessions", status: http.StatusNotFound},
+	} {
 		response := httptest.NewRecorder()
-		handler.ServeHTTP(response, newMutationRequest(http.MethodPost, target, strings.NewReader(`{}`)))
-		if response.Code != http.StatusNotFound {
-			t.Fatalf("POST %s = %d, want 404", target, response.Code)
+		handler.ServeHTTP(response, newMutationRequest(http.MethodPost, test.target, strings.NewReader(`{}`)))
+		if response.Code != test.status {
+			t.Fatalf("POST %s = %d, want %d", test.target, response.Code, test.status)
 		}
 	}
 }

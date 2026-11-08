@@ -1,5 +1,7 @@
 import { request } from "./request";
 
+import type { PublicPlayer } from "./players";
+
 export { APIError } from "./request";
 
 export type TileOwner = 0 | 1 | 2;
@@ -40,6 +42,33 @@ export interface GameResult {
   playerTwoScore: number;
   winner: 0 | 1 | 2;
   tie: boolean;
+}
+
+export interface ActiveGameSummary {
+  id: string;
+  opponent: PublicPlayer;
+  playerSeat: 1 | 2;
+  activePlayer: 1 | 2;
+  status: "active";
+  scores: { playerOne: number; playerTwo: number };
+  version: number;
+  lastActivity: string;
+}
+
+export interface ActiveGamePage {
+  items: ActiveGameSummary[];
+  nextCursor?: string;
+}
+
+export function getActiveGames(
+  cursor = "",
+  limit = 20,
+): Promise<ActiveGamePage> {
+  const parameters = new URLSearchParams({ limit: String(limit) });
+  if (cursor) parameters.set("cursor", cursor);
+  return request<ActiveGamePage>(`/api/v1/games?${parameters}`, {
+    method: "GET",
+  });
 }
 
 export async function getGame(gameId: string): Promise<GameState> {

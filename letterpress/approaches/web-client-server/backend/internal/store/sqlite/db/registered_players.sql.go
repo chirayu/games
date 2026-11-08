@@ -111,3 +111,58 @@ func (q *Queries) GetRegisteredPlayerBySessionHash(ctx context.Context, arg GetR
 	)
 	return i, err
 }
+
+const searchRegisteredPlayers = `-- name: SearchRegisteredPlayers :many
+SELECT id, display_name, normalized_name, created_at
+FROM registered_players
+WHERE id != ?1
+  AND instr(normalized_name, ?2) > 0
+  AND (
+      normalized_name > ?3
+      OR (normalized_name = ?3 AND id > ?4)
+  )
+ORDER BY normalized_name ASC, id ASC
+LIMIT ?5
+`
+
+type SearchRegisteredPlayersParams struct {
+	ExcludedPlayerID string `json:"excluded_player_id"`
+	NameFragment     string `json:"name_fragment"`
+	CursorName       string `json:"cursor_name"`
+	CursorID         string `json:"cursor_id"`
+	ResultLimit      int64  `json:"result_limit"`
+}
+
+func (q *Queries) SearchRegisteredPlayers(ctx context.Context, arg SearchRegisteredPlayersParams) ([]RegisteredPlayer, error) {
+	rows, err := q.db.QueryContext(ctx, searchRegisteredPlayers,
+		arg.ExcludedPlayerID,
+		arg.NameFragment,
+		arg.CursorName,
+		arg.CursorID,
+		arg.ResultLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []RegisteredPlayer{}
+	for rows.Next() {
+		var i RegisteredPlayer
+		if err := rows.Scan(
+			&i.ID,
+			&i.DisplayName,
+			&i.NormalizedName,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}

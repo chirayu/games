@@ -219,6 +219,36 @@ func TestTransactMoveRequiresRegisteredGameMembership(t *testing.T) {
 	assertMoveCount(t, repository, game.ID, 0)
 }
 
+func TestLobbyQueriesScopeGamesAndExcludeCurrentPlayerFromSearch(t *testing.T) {
+	repository := openTestRepository(t, filepath.Join(t.TempDir(), "letterpress.db"))
+	game, seats := testGame(t, repository)
+	if err := repository.CreateGame(context.Background(), game, seats); err != nil {
+		t.Fatalf("create game: %v", err)
+	}
+
+	rows, err := repository.ListActiveGamesForPlayer(
+		context.Background(), seats[0].PlayerID,
+		time.Date(9999, time.December, 31, 23, 59, 59, 0, time.UTC), "\uffff", 10,
+	)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("active game rows = %#v, err %v", rows, err)
+	}
+	if rows[0].ID != game.ID || rows[0].PlayerSeat != 1 || rows[0].OpponentID != seats[1].PlayerID || rows[0].OpponentName != "Player Two" {
+		t.Fatalf("active game row = %#v", rows[0])
+	}
+	if otherRows, err := repository.ListActiveGamesForPlayer(
+		context.Background(), "not-a-member",
+		time.Date(9999, time.December, 31, 23, 59, 59, 0, time.UTC), "\uffff", 10,
+	); err != nil || len(otherRows) != 0 {
+		t.Fatalf("non-member rows = %#v, err %v", otherRows, err)
+	}
+
+	players, err := repository.SearchRegisteredPlayers(context.Background(), seats[0].PlayerID, "player", "", "", 10)
+	if err != nil || len(players) != 1 || players[0].ID != seats[1].PlayerID {
+		t.Fatalf("search players = %#v, err %v", players, err)
+	}
+}
+
 func openTestRepository(t *testing.T, path string) *Repository {
 	t.Helper()
 	repository, err := Open(context.Background(), path)

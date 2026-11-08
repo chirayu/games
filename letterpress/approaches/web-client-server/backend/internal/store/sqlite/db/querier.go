@@ -19,8 +19,10 @@ type Querier interface {
 	GetGameSeatByPlayer(ctx context.Context, arg GetGameSeatByPlayerParams) (GameSeat, error)
 	GetRegisteredPlayerByNormalizedName(ctx context.Context, normalizedName string) (RegisteredPlayer, error)
 	GetRegisteredPlayerBySessionHash(ctx context.Context, arg GetRegisteredPlayerBySessionHashParams) (RegisteredPlayer, error)
+	ListActiveGamesForPlayer(ctx context.Context, arg ListActiveGamesForPlayerParams) ([]ListActiveGamesForPlayerRow, error)
 	ListGameSeats(ctx context.Context, gameID string) ([]GameSeat, error)
 	ListMoves(ctx context.Context, gameID string) ([]Move, error)
+	SearchRegisteredPlayers(ctx context.Context, arg SearchRegisteredPlayersParams) ([]RegisteredPlayer, error)
 	UpdateGameState(ctx context.Context, arg UpdateGameStateParams) (int64, error)
 }
 

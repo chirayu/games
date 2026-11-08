@@ -19,6 +19,11 @@ function testRouter() {
     history: createMemoryHistory(),
     routes: [
       { path: "/games/:gameId", name: "game", component: GameView },
+      {
+        path: "/lobby",
+        name: "lobby",
+        component: { template: "<p>lobby</p>" },
+      },
       { path: "/", name: "home", component: { template: "<p>home</p>" } },
     ],
   });

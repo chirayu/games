@@ -49,6 +49,19 @@ type GameSeat struct {
 	CreatedAt time.Time
 }
 
+// ActiveGameSummary is the persisted data needed to build one lobby row.
+type ActiveGameSummary struct {
+	ID            string
+	TileOwners    []byte
+	CurrentPlayer int64
+	Status        string
+	Version       int64
+	UpdatedAt     time.Time
+	PlayerSeat    int64
+	OpponentID    string
+	OpponentName  string
+}
+
 // RegisteredPlayer is a durable name-based identity independent of a game.
 type RegisteredPlayer struct {
 	ID             string
@@ -305,6 +318,51 @@ func (repository *Repository) GetGameSeatByPlayer(ctx context.Context, gameID, p
 		return GameSeat{}, fmt.Errorf("get game seat by player: %w", err)
 	}
 	return GameSeat{GameID: row.GameID, Seat: row.Seat, PlayerID: row.PlayerID, CreatedAt: row.CreatedAt}, nil
+}
+
+// ListActiveGamesForPlayer returns one stable, recent-activity page scoped to a participant.
+func (repository *Repository) ListActiveGamesForPlayer(
+	ctx context.Context,
+	playerID string,
+	cursorUpdatedAt time.Time,
+	cursorID string,
+	limit int,
+) ([]ActiveGameSummary, error) {
+	rows, err := repository.queries.ListActiveGamesForPlayer(ctx, generated.ListActiveGamesForPlayerParams{
+		PlayerID: playerID, CursorUpdatedAt: cursorUpdatedAt, CursorID: cursorID, ResultLimit: int64(limit),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list active games for player: %w", err)
+	}
+	items := make([]ActiveGameSummary, 0, len(rows))
+	for _, row := range rows {
+		items = append(items, ActiveGameSummary{
+			ID: row.ID, TileOwners: cloneBytes(row.TileOwners), CurrentPlayer: row.CurrentPlayer,
+			Status: row.Status, Version: row.Version, UpdatedAt: row.UpdatedAt,
+			PlayerSeat: row.PlayerSeat, OpponentID: row.OpponentID, OpponentName: row.OpponentName,
+		})
+	}
+	return items, nil
+}
+
+// SearchRegisteredPlayers returns public identity candidates in stable name order.
+func (repository *Repository) SearchRegisteredPlayers(
+	ctx context.Context,
+	excludedPlayerID, namePattern, cursorName, cursorID string,
+	limit int,
+) ([]RegisteredPlayer, error) {
+	rows, err := repository.queries.SearchRegisteredPlayers(ctx, generated.SearchRegisteredPlayersParams{
+		ExcludedPlayerID: excludedPlayerID, NameFragment: namePattern,
+		CursorName: cursorName, CursorID: cursorID, ResultLimit: int64(limit),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("search registered players: %w", err)
+	}
+	players := make([]RegisteredPlayer, 0, len(rows))
+	for _, row := range rows {
+		players = append(players, registeredPlayerFromRow(row))
+	}
+	return players, nil
 }
 
 // ApplyMove atomically records a move and its resulting state. The update only

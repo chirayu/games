@@ -109,6 +109,32 @@ successes use a `data` envelope and failures use an `error` envelope with
 stable `code` and `message` fields. State-changing endpoints require a matching
 browser origin.
 
+## Lobby and player discovery
+
+`GET /api/v1/games` authenticates the application-wide player session and
+returns only active games in which that player holds a seat. Compact summaries
+contain the opponent's public ID, display name, and player type; the requesting
+seat, active seat, status, scores, version, and last activity. Scores are
+derived from ownership by the application service. Board letters, move history,
+other memberships, and credentials are not part of the lobby response.
+
+Games are ordered by `updated_at DESC, id DESC`, so accepted moves place a game
+at the top deterministically. Opaque keyset cursors continue from that pair.
+The default page size is 20 and the hard maximum is 50. Completed games are not
+included in this active-game endpoint.
+
+`GET /api/v1/players?q=...` performs bounded, case-insensitive matching against
+normalized registered-player names. It excludes the requesting player and
+returns only public ID, display name, and type, ordered by normalized name and
+ID. It uses the same page-size bounds and an opaque keyset cursor. Empty or
+invalid search fragments are rejected rather than exposing an unfiltered player
+directory.
+
+The lobby groups summaries by whether the active seat is the player's seat,
+links each row to the authoritative game view, and provides empty, loading,
+expired-session, and retry states. Player discovery records retain their IDs for
+the later challenge-allocation flow.
+
 `GET /api/v1/games/{gameID}` authenticates the application-wide player session,
 requires that registered player to hold a game seat, and returns the current
 persisted board plus the requesting player's seat. Scores and

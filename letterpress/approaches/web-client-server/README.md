@@ -140,8 +140,8 @@ use cryptographically secure random letters.
 ## Development status
 
 The pure Go game engine, SQLite persistence layer, name-only registered-player
-sessions and UI, registered game membership, authenticated responsive board,
-transactional move submission,
+sessions and UI, registered game membership, participant-scoped active-game
+lobby and player discovery, authenticated responsive board, transactional move submission,
 multi-day focus/visibility refresh and polling, recoverable local move drafts,
 server-authoritative English dictionary validation, final results and move
 history, HTTP service, Vue application, router, Vite development proxy, and

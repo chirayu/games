@@ -55,6 +55,88 @@ func (q *Queries) GetGameSeatByPlayer(ctx context.Context, arg GetGameSeatByPlay
 	return i, err
 }
 
+const listActiveGamesForPlayer = `-- name: ListActiveGamesForPlayer :many
+SELECT
+    g.id,
+    g.tile_owners,
+    g.current_player,
+    g.status,
+    g.version,
+    g.updated_at,
+    own.seat AS player_seat,
+    opponent.player_id AS opponent_id,
+    opponent_player.display_name AS opponent_name
+FROM game_seats AS own
+JOIN games AS g ON g.id = own.game_id
+JOIN game_seats AS opponent ON opponent.game_id = g.id AND opponent.seat != own.seat
+JOIN registered_players AS opponent_player ON opponent_player.id = opponent.player_id
+WHERE own.player_id = ?1
+  AND g.status = 'active'
+  AND (
+      g.updated_at < ?2
+      OR (g.updated_at = ?2 AND g.id < ?3)
+  )
+ORDER BY g.updated_at DESC, g.id DESC
+LIMIT ?4
+`
+
+type ListActiveGamesForPlayerParams struct {
+	PlayerID        string    `json:"player_id"`
+	CursorUpdatedAt time.Time `json:"cursor_updated_at"`
+	CursorID        string    `json:"cursor_id"`
+	ResultLimit     int64     `json:"result_limit"`
+}
+
+type ListActiveGamesForPlayerRow struct {
+	ID            string    `json:"id"`
+	TileOwners    []byte    `json:"tile_owners"`
+	CurrentPlayer int64     `json:"current_player"`
+	Status        string    `json:"status"`
+	Version       int64     `json:"version"`
+	UpdatedAt     time.Time `json:"updated_at"`
+	PlayerSeat    int64     `json:"player_seat"`
+	OpponentID    string    `json:"opponent_id"`
+	OpponentName  string    `json:"opponent_name"`
+}
+
+func (q *Queries) ListActiveGamesForPlayer(ctx context.Context, arg ListActiveGamesForPlayerParams) ([]ListActiveGamesForPlayerRow, error) {
+	rows, err := q.db.QueryContext(ctx, listActiveGamesForPlayer,
+		arg.PlayerID,
+		arg.CursorUpdatedAt,
+		arg.CursorID,
+		arg.ResultLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListActiveGamesForPlayerRow{}
+	for rows.Next() {
+		var i ListActiveGamesForPlayerRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.TileOwners,
+			&i.CurrentPlayer,
+			&i.Status,
+			&i.Version,
+			&i.UpdatedAt,
+			&i.PlayerSeat,
+			&i.OpponentID,
+			&i.OpponentName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listGameSeats = `-- name: ListGameSeats :many
 SELECT game_id, seat, player_id, created_at
 FROM game_seats

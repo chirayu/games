@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"strconv"
 	"strings"
 	"time"
 
@@ -40,6 +41,8 @@ func NewHandler(service *app.Service, config Config) http.Handler {
 	mux.HandleFunc("POST /api/v1/player-sessions", handler.enterPlayer)
 	mux.HandleFunc("DELETE /api/v1/player-sessions/current", handler.logoutPlayer)
 	mux.HandleFunc("GET /api/v1/players/me", handler.currentPlayer)
+	mux.HandleFunc("GET /api/v1/players", handler.searchPlayers)
+	mux.HandleFunc("GET /api/v1/games", handler.listActiveGames)
 	mux.HandleFunc("GET /api/v1/games/{gameID}", handler.getGame)
 	mux.HandleFunc("POST /api/v1/games/{gameID}/moves", handler.submitMove)
 	if config.Frontend != nil {
@@ -185,6 +188,62 @@ func (handler *handler) setPlayerSessionCookie(
 		Expires: expires, MaxAge: maxAge, HttpOnly: true,
 		Secure: !handler.config.InsecureCookies, SameSite: http.SameSiteLaxMode,
 	})
+}
+
+func (handler *handler) listActiveGames(response http.ResponseWriter, request *http.Request) {
+	response.Header().Set("Cache-Control", "no-store")
+	limit, ok := pageLimit(request)
+	if !ok {
+		writeError(response, http.StatusBadRequest, "invalid_pagination", "limit must be between 1 and 50")
+		return
+	}
+	page, err := handler.service.ListActiveGames(
+		request.Context(), handler.playerSessionToken(request), request.URL.Query().Get("cursor"), limit,
+	)
+	switch {
+	case errors.Is(err, app.ErrInvalidPlayerSession):
+		writeError(response, http.StatusUnauthorized, "player_session_required", "a valid player session is required")
+	case errors.Is(err, app.ErrInvalidPagination):
+		writeError(response, http.StatusBadRequest, "invalid_pagination", "cursor or limit is invalid")
+	case err != nil:
+		writeError(response, http.StatusInternalServerError, "internal_error", "could not list active games")
+	default:
+		writeJSON(response, http.StatusOK, map[string]any{"data": page})
+	}
+}
+
+func (handler *handler) searchPlayers(response http.ResponseWriter, request *http.Request) {
+	response.Header().Set("Cache-Control", "no-store")
+	limit, ok := pageLimit(request)
+	if !ok {
+		writeError(response, http.StatusBadRequest, "invalid_pagination", "limit must be between 1 and 50")
+		return
+	}
+	page, err := handler.service.SearchPlayers(
+		request.Context(), handler.playerSessionToken(request), request.URL.Query().Get("q"),
+		request.URL.Query().Get("cursor"), limit,
+	)
+	switch {
+	case errors.Is(err, app.ErrInvalidPlayerSession):
+		writeError(response, http.StatusUnauthorized, "player_session_required", "a valid player session is required")
+	case errors.Is(err, app.ErrInvalidPlayerSearch):
+		writeError(response, http.StatusUnprocessableEntity, "invalid_player_search", "enter a valid player name fragment")
+	case errors.Is(err, app.ErrInvalidPagination):
+		writeError(response, http.StatusBadRequest, "invalid_pagination", "cursor or limit is invalid")
+	case err != nil:
+		writeError(response, http.StatusInternalServerError, "internal_error", "could not search players")
+	default:
+		writeJSON(response, http.StatusOK, map[string]any{"data": page})
+	}
+}
+
+func pageLimit(request *http.Request) (int, bool) {
+	raw := request.URL.Query().Get("limit")
+	if raw == "" {
+		return 20, true
+	}
+	limit, err := strconv.Atoi(raw)
+	return limit, err == nil && limit >= 1 && limit <= 50
 }
 
 func (handler *handler) getGame(response http.ResponseWriter, request *http.Request) {

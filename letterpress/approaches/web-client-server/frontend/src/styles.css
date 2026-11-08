@@ -250,6 +250,119 @@ h1 {
   font-weight: 500;
 }
 
+.lobby-state {
+  background: rgb(255 253 247 / 82%);
+  border: 1px solid rgb(82 66 43 / 16%);
+  border-radius: 1rem;
+  margin-top: 3rem;
+  padding: clamp(1.5rem, 5vw, 3rem);
+  text-align: center;
+}
+
+.lobby-content > section {
+  margin-top: 2.5rem;
+}
+
+.section-title {
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 1.7rem;
+  font-weight: 500;
+  margin: 0 0 1rem;
+}
+
+.game-list {
+  display: grid;
+  gap: 0.8rem;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+}
+
+.game-summary {
+  background: #fffdf7;
+  border: 1px solid rgb(82 66 43 / 16%);
+  border-radius: 0.85rem;
+  color: #242019;
+  display: grid;
+  gap: 0.35rem;
+  padding: 1rem;
+  text-decoration: none;
+}
+
+.game-summary:hover {
+  border-color: #2f6f5a;
+  box-shadow: 0 0.25rem 1rem rgb(47 111 90 / 12%);
+}
+
+.game-summary strong {
+  font-size: 1.1rem;
+}
+
+.game-summary span {
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 1.6rem;
+}
+
+.game-summary small,
+.player-results small {
+  color: var(--ink-muted);
+}
+
+.load-more {
+  margin-top: 1rem;
+}
+
+.player-search {
+  border-top: 1px solid rgb(82 66 43 / 16%);
+  padding-top: 2rem;
+}
+
+.search-form {
+  display: flex;
+  gap: 0.65rem;
+  max-width: 34rem;
+}
+
+.search-form input {
+  background: #fff;
+  border: 1px solid #b9aa91;
+  border-radius: 999px;
+  min-width: 0;
+  padding: 0.8rem 1rem;
+  width: 100%;
+}
+
+.player-results {
+  list-style: none;
+  margin: 1rem 0 0;
+  max-width: 34rem;
+  padding: 0;
+}
+
+.player-results li {
+  align-items: center;
+  border-bottom: 1px solid rgb(82 66 43 / 14%);
+  display: flex;
+  justify-content: space-between;
+  padding: 0.75rem 0;
+}
+
+.visually-hidden {
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  height: 1px;
+  overflow: hidden;
+  position: absolute;
+  white-space: nowrap;
+  width: 1px;
+}
+
+@media (max-width: 36rem) {
+  .lobby-header,
+  .search-form {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
+
 .notice {
   color: var(--ink-muted);
   line-height: 1.5;
