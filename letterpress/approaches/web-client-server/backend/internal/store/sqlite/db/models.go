@@ -5,6 +5,7 @@
 package db
 
 import (
+	"database/sql"
 	"time"
 )
 
@@ -17,6 +18,20 @@ type Game struct {
 	Version       int64     `json:"version"`
 	CreatedAt     time.Time `json:"created_at"`
 	UpdatedAt     time.Time `json:"updated_at"`
+}
+
+type GameAllocation struct {
+	ID             string         `json:"id"`
+	RequesterID    string         `json:"requester_id"`
+	OpponentID     sql.NullString `json:"opponent_id"`
+	Mode           string         `json:"mode"`
+	State          string         `json:"state"`
+	IdempotencyKey string         `json:"idempotency_key"`
+	GameID         sql.NullString `json:"game_id"`
+	FailureReason  sql.NullString `json:"failure_reason"`
+	ExpiresAt      sql.NullTime   `json:"expires_at"`
+	CreatedAt      time.Time      `json:"created_at"`
+	UpdatedAt      time.Time      `json:"updated_at"`
 }
 
 type GameSeat struct {

@@ -149,6 +149,8 @@ focused backend and frontend tests are in place.
 The deterministic two-player Playwright journey is also in place. Production
 packaging, one-origin static serving, structured operations, and deployment
 documentation are also complete.
+The durable allocation resource and atomic game-creation boundary are also in
+place; specified challenge actions and random matchmaking build on it next.
 
 ## Documentation
 

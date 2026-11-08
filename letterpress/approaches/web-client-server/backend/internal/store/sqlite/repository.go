@@ -27,6 +27,10 @@ var (
 	ErrGameNotFound = errors.New("game not found")
 	// ErrPlayerNotFound indicates that a registered player has no seat in a game.
 	ErrPlayerNotFound = errors.New("player not found")
+	// ErrAllocationTransition indicates that an allocation cannot leave its current state.
+	ErrAllocationTransition = errors.New("invalid allocation transition")
+	// ErrAllocationParticipant indicates that completion participants do not match the allocation.
+	ErrAllocationParticipant = errors.New("invalid allocation participant")
 )
 
 // Game is the current persisted state of a game.
@@ -60,6 +64,21 @@ type ActiveGameSummary struct {
 	PlayerSeat    int64
 	OpponentID    string
 	OpponentName  string
+}
+
+// GameAllocation is a durable request to assign two players to one game.
+type GameAllocation struct {
+	ID             string
+	RequesterID    string
+	OpponentID     string
+	Mode           string
+	State          string
+	IdempotencyKey string
+	GameID         string
+	FailureReason  string
+	ExpiresAt      *time.Time
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 // RegisteredPlayer is a durable name-based identity independent of a game.
@@ -231,6 +250,135 @@ func (repository *Repository) DeletePlayerSession(ctx context.Context, tokenHash
 		return fmt.Errorf("delete player session: %w", err)
 	}
 	return nil
+}
+
+// CreateGameAllocation atomically creates or retrieves a requester's idempotent allocation.
+func (repository *Repository) CreateGameAllocation(ctx context.Context, candidate GameAllocation) (GameAllocation, bool, error) {
+	connection, err := repository.database.Conn(ctx)
+	if err != nil {
+		return GameAllocation{}, false, fmt.Errorf("acquire allocation connection: %w", err)
+	}
+	defer connection.Close()
+	if _, err := connection.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+		return GameAllocation{}, false, fmt.Errorf("begin allocation transaction: %w", err)
+	}
+	defer func() { _, _ = connection.ExecContext(context.Background(), "ROLLBACK") }()
+	queries := generated.New(connection)
+	rows, err := queries.CreateGameAllocation(ctx, generated.CreateGameAllocationParams{
+		ID: candidate.ID, RequesterID: candidate.RequesterID, OpponentID: nullableString(candidate.OpponentID),
+		Mode: candidate.Mode, State: candidate.State, IdempotencyKey: candidate.IdempotencyKey,
+		GameID: nullableString(candidate.GameID), FailureReason: nullableString(candidate.FailureReason),
+		ExpiresAt: nullableTime(candidate.ExpiresAt), CreatedAt: candidate.CreatedAt, UpdatedAt: candidate.UpdatedAt,
+	})
+	if err != nil {
+		return GameAllocation{}, false, fmt.Errorf("create game allocation: %w", err)
+	}
+	row, err := queries.GetGameAllocationByRequesterKey(ctx, generated.GetGameAllocationByRequesterKeyParams{
+		RequesterID: candidate.RequesterID, IdempotencyKey: candidate.IdempotencyKey,
+	})
+	if err != nil {
+		return GameAllocation{}, false, fmt.Errorf("get idempotent allocation: %w", err)
+	}
+	if _, err := connection.ExecContext(ctx, "COMMIT"); err != nil {
+		return GameAllocation{}, false, fmt.Errorf("commit allocation transaction: %w", err)
+	}
+	return allocationFromRow(row), rows == 1, nil
+}
+
+// GetGameAllocation retrieves one allocation without applying authorization policy.
+func (repository *Repository) GetGameAllocation(ctx context.Context, id string) (GameAllocation, error) {
+	row, err := repository.queries.GetGameAllocation(ctx, id)
+	if err != nil {
+		return GameAllocation{}, fmt.Errorf("get game allocation: %w", err)
+	}
+	return allocationFromRow(row), nil
+}
+
+// CancelGameAllocation moves a requester's nonterminal allocation to cancelled.
+func (repository *Repository) CancelGameAllocation(ctx context.Context, id, requesterID string, updatedAt time.Time) (GameAllocation, error) {
+	rows, err := repository.queries.CancelGameAllocation(ctx, generated.CancelGameAllocationParams{
+		UpdatedAt: updatedAt, ID: id, RequesterID: requesterID,
+	})
+	if err != nil {
+		return GameAllocation{}, fmt.Errorf("cancel game allocation: %w", err)
+	}
+	if rows != 1 {
+		return GameAllocation{}, ErrAllocationTransition
+	}
+	return repository.GetGameAllocation(ctx, id)
+}
+
+// CompleteGameAllocation atomically creates one game and assigns deterministic seats.
+// Repeated or concurrent completion returns the already allocated resource.
+func (repository *Repository) CompleteGameAllocation(
+	ctx context.Context,
+	allocationID, opponentID string,
+	game Game,
+	seats [2]GameSeat,
+) (GameAllocation, error) {
+	connection, err := repository.database.Conn(ctx)
+	if err != nil {
+		return GameAllocation{}, fmt.Errorf("acquire completion connection: %w", err)
+	}
+	defer connection.Close()
+	if _, err := connection.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+		return GameAllocation{}, fmt.Errorf("begin completion transaction: %w", err)
+	}
+	defer func() { _, _ = connection.ExecContext(context.Background(), "ROLLBACK") }()
+	queries := generated.New(connection)
+	row, err := queries.GetGameAllocation(ctx, allocationID)
+	if err != nil {
+		return GameAllocation{}, fmt.Errorf("get allocation for completion: %w", err)
+	}
+	allocation := allocationFromRow(row)
+	if allocation.State == "allocated" {
+		if _, err := connection.ExecContext(ctx, "COMMIT"); err != nil {
+			return GameAllocation{}, fmt.Errorf("commit idempotent completion: %w", err)
+		}
+		return allocation, nil
+	}
+	if allocation.State != "pending_acceptance" && allocation.State != "queued" {
+		return GameAllocation{}, ErrAllocationTransition
+	}
+	if opponentID == "" || opponentID == allocation.RequesterID ||
+		(allocation.OpponentID != "" && allocation.OpponentID != opponentID) {
+		return GameAllocation{}, ErrAllocationParticipant
+	}
+	if seats[0].GameID != game.ID || seats[0].Seat != 1 || seats[0].PlayerID != allocation.RequesterID ||
+		seats[1].GameID != game.ID || seats[1].Seat != 2 || seats[1].PlayerID != opponentID {
+		return GameAllocation{}, ErrAllocationParticipant
+	}
+	if err := queries.CreateGame(ctx, generated.CreateGameParams{
+		ID: game.ID, BoardLetters: cloneBytes(game.BoardLetters), TileOwners: cloneBytes(game.TileOwners),
+		CurrentPlayer: game.CurrentPlayer, Status: game.Status, Version: game.Version,
+		CreatedAt: game.CreatedAt, UpdatedAt: game.UpdatedAt,
+	}); err != nil {
+		return GameAllocation{}, fmt.Errorf("create allocated game: %w", err)
+	}
+	for _, seat := range seats {
+		if err := queries.CreateGameSeat(ctx, generated.CreateGameSeatParams{
+			GameID: seat.GameID, Seat: seat.Seat, PlayerID: seat.PlayerID, CreatedAt: seat.CreatedAt,
+		}); err != nil {
+			return GameAllocation{}, fmt.Errorf("create allocated seat %d: %w", seat.Seat, err)
+		}
+	}
+	rows, err := queries.CompleteGameAllocation(ctx, generated.CompleteGameAllocationParams{
+		OpponentID: nullableString(opponentID), GameID: nullableString(game.ID), UpdatedAt: game.UpdatedAt, ID: allocationID,
+	})
+	if err != nil {
+		return GameAllocation{}, fmt.Errorf("complete game allocation: %w", err)
+	}
+	if rows != 1 {
+		return GameAllocation{}, ErrAllocationTransition
+	}
+	row, err = queries.GetGameAllocation(ctx, allocationID)
+	if err != nil {
+		return GameAllocation{}, fmt.Errorf("get completed allocation: %w", err)
+	}
+	if _, err := connection.ExecContext(ctx, "COMMIT"); err != nil {
+		return GameAllocation{}, fmt.Errorf("commit allocation completion: %w", err)
+	}
+	return allocationFromRow(row), nil
 }
 
 // CreateGame atomically creates a game and both registered-player seats.
@@ -547,4 +695,36 @@ func registeredPlayerFromRow(row generated.RegisteredPlayer) RegisteredPlayer {
 		ID: row.ID, DisplayName: row.DisplayName,
 		NormalizedName: row.NormalizedName, CreatedAt: row.CreatedAt,
 	}
+}
+
+func allocationFromRow(row generated.GameAllocation) GameAllocation {
+	allocation := GameAllocation{
+		ID: row.ID, RequesterID: row.RequesterID, Mode: row.Mode, State: row.State,
+		IdempotencyKey: row.IdempotencyKey, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
+	}
+	if row.OpponentID.Valid {
+		allocation.OpponentID = row.OpponentID.String
+	}
+	if row.GameID.Valid {
+		allocation.GameID = row.GameID.String
+	}
+	if row.FailureReason.Valid {
+		allocation.FailureReason = row.FailureReason.String
+	}
+	if row.ExpiresAt.Valid {
+		expiresAt := row.ExpiresAt.Time
+		allocation.ExpiresAt = &expiresAt
+	}
+	return allocation
+}
+
+func nullableString(value string) sql.NullString {
+	return sql.NullString{String: value, Valid: value != ""}
+}
+
+func nullableTime(value *time.Time) sql.NullTime {
+	if value == nil {
+		return sql.NullTime{}
+	}
+	return sql.NullTime{Time: *value, Valid: true}
 }

@@ -40,3 +40,8 @@ ticket intentionally changes one.
 10. **Deployment target.** Produce a provider-neutral OCI container, durable
     SQLite volume guidance, and GitHub Actions validation. Selecting and
     provisioning a hosting provider is a later decision.
+11. **Durable game allocation.** Create games only by completing a persisted,
+    idempotent allocation. Allocation modes share one explicit state machine;
+    completion assigns the requester seat 1 and the resolved opponent seat 2 in
+    the same transaction that creates the game. Public retries identify the
+    original allocation with a requester-scoped idempotency key.

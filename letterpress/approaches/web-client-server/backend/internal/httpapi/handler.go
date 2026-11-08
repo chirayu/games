@@ -45,6 +45,9 @@ func NewHandler(service *app.Service, config Config) http.Handler {
 	mux.HandleFunc("GET /api/v1/games", handler.listActiveGames)
 	mux.HandleFunc("GET /api/v1/games/{gameID}", handler.getGame)
 	mux.HandleFunc("POST /api/v1/games/{gameID}/moves", handler.submitMove)
+	mux.HandleFunc("POST /api/v1/game-allocations", handler.createAllocation)
+	mux.HandleFunc("GET /api/v1/game-allocations/{allocationID}", handler.getAllocation)
+	mux.HandleFunc("DELETE /api/v1/game-allocations/{allocationID}", handler.cancelAllocation)
 	if config.Frontend != nil {
 		mux.HandleFunc("GET /", handler.frontend)
 	}
@@ -244,6 +247,86 @@ func pageLimit(request *http.Request) (int, bool) {
 	}
 	limit, err := strconv.Atoi(raw)
 	return limit, err == nil && limit >= 1 && limit <= 50
+}
+
+func (handler *handler) createAllocation(response http.ResponseWriter, request *http.Request) {
+	response.Header().Set("Cache-Control", "no-store")
+	if !handler.validOrigin(request) {
+		writeError(response, http.StatusForbidden, "invalid_origin", "request origin is not allowed")
+		return
+	}
+	var input struct {
+		Mode       string `json:"mode"`
+		OpponentID string `json:"opponentId"`
+	}
+	decoder := json.NewDecoder(http.MaxBytesReader(response, request.Body, 4096))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil {
+		writeError(response, http.StatusBadRequest, "invalid_request", "mode and optional opponentId are required")
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		writeError(response, http.StatusBadRequest, "invalid_request", "request body must contain one JSON object")
+		return
+	}
+	allocation, created, err := handler.service.CreateAllocation(
+		request.Context(), handler.playerSessionToken(request), request.Header.Get("Idempotency-Key"),
+		input.Mode, input.OpponentID,
+	)
+	if handler.writeAllocationError(response, err) {
+		return
+	}
+	status := http.StatusOK
+	if created {
+		status = http.StatusCreated
+	}
+	writeJSON(response, status, map[string]any{"data": allocation})
+}
+
+func (handler *handler) getAllocation(response http.ResponseWriter, request *http.Request) {
+	response.Header().Set("Cache-Control", "no-store")
+	allocation, err := handler.service.GetAllocation(
+		request.Context(), handler.playerSessionToken(request), request.PathValue("allocationID"),
+	)
+	if handler.writeAllocationError(response, err) {
+		return
+	}
+	writeJSON(response, http.StatusOK, map[string]any{"data": allocation})
+}
+
+func (handler *handler) cancelAllocation(response http.ResponseWriter, request *http.Request) {
+	response.Header().Set("Cache-Control", "no-store")
+	if !handler.validOrigin(request) {
+		writeError(response, http.StatusForbidden, "invalid_origin", "request origin is not allowed")
+		return
+	}
+	allocation, err := handler.service.CancelAllocation(
+		request.Context(), handler.playerSessionToken(request), request.PathValue("allocationID"),
+	)
+	if handler.writeAllocationError(response, err) {
+		return
+	}
+	writeJSON(response, http.StatusOK, map[string]any{"data": allocation})
+}
+
+func (handler *handler) writeAllocationError(response http.ResponseWriter, err error) bool {
+	switch {
+	case err == nil:
+		return false
+	case errors.Is(err, app.ErrInvalidPlayerSession):
+		writeError(response, http.StatusUnauthorized, "player_session_required", "a valid player session is required")
+	case errors.Is(err, app.ErrAllocationNotFound):
+		writeError(response, http.StatusNotFound, "allocation_not_found", "allocation was not found")
+	case errors.Is(err, app.ErrInvalidAllocation):
+		writeError(response, http.StatusUnprocessableEntity, "invalid_allocation", "allocation mode, opponent, or idempotency key is invalid")
+	case errors.Is(err, app.ErrIdempotencyConflict):
+		writeError(response, http.StatusConflict, "idempotency_conflict", "idempotency key was already used for another allocation")
+	case errors.Is(err, app.ErrInvalidAllocationState):
+		writeError(response, http.StatusConflict, "invalid_allocation_state", "allocation cannot transition from its current state")
+	default:
+		writeError(response, http.StatusInternalServerError, "internal_error", "allocation request failed")
+	}
+	return true
 }
 
 func (handler *handler) getGame(response http.ResponseWriter, request *http.Request) {

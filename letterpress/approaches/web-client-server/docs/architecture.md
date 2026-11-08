@@ -135,6 +135,33 @@ links each row to the authoritative game view, and provides empty, loading,
 expired-session, and retry states. Player discovery records retain their IDs for
 the later challenge-allocation flow.
 
+## Durable game allocation
+
+Games are created behind a durable `game_allocations` resource rather than a
+public game-creation endpoint. `POST /api/v1/game-allocations` authenticates the
+requester exclusively from the application session and requires an
+`Idempotency-Key` of 1–128 characters. A key is unique per requester. Reusing it
+with the same mode and opponent returns the original allocation; reusing it for
+different input returns a conflict.
+
+Allocation modes are `specified`, `random`, and the reserved `bot` mode. Their
+durable states are `pending_acceptance`, `queued`, `allocated`, `declined`,
+`cancelled`, `expired`, and `failed`. Terminal states cannot be reopened.
+Specified requests begin pending acceptance; random and reserved bot requests
+begin queued. Bot selection is not implemented yet.
+
+`GET /api/v1/game-allocations/{id}` is private to the requester and intended
+opponent. Unrelated players receive the same not-found response as an unknown
+allocation. `DELETE` lets only the requester cancel a pending or queued
+allocation. State-changing requests retain same-origin enforcement.
+
+Completion runs in an immediate SQLite transaction. It locks and rechecks the
+allocation, creates the game and both seats, and attaches the game ID before
+commit. The requester deterministically receives seat 1 and the resolved
+opponent seat 2. Repeated or concurrent completion returns the single existing
+game. The domain engine receives only those resolved seats and remains unaware
+of allocation mode.
+
 `GET /api/v1/games/{gameID}` authenticates the application-wide player session,
 requires that registered player to hold a game seat, and returns the current
 persisted board plus the requesting player's seat. Scores and

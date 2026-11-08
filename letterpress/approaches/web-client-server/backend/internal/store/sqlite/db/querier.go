@@ -9,13 +9,18 @@ import (
 )
 
 type Querier interface {
+	CancelGameAllocation(ctx context.Context, arg CancelGameAllocationParams) (int64, error)
+	CompleteGameAllocation(ctx context.Context, arg CompleteGameAllocationParams) (int64, error)
 	CreateGame(ctx context.Context, arg CreateGameParams) error
+	CreateGameAllocation(ctx context.Context, arg CreateGameAllocationParams) (int64, error)
 	CreateGameSeat(ctx context.Context, arg CreateGameSeatParams) error
 	CreateMove(ctx context.Context, arg CreateMoveParams) error
 	CreatePlayerSession(ctx context.Context, arg CreatePlayerSessionParams) error
 	CreateRegisteredPlayer(ctx context.Context, arg CreateRegisteredPlayerParams) (int64, error)
 	DeletePlayerSession(ctx context.Context, tokenHash []byte) (int64, error)
 	GetGame(ctx context.Context, id string) (Game, error)
+	GetGameAllocation(ctx context.Context, id string) (GameAllocation, error)
+	GetGameAllocationByRequesterKey(ctx context.Context, arg GetGameAllocationByRequesterKeyParams) (GameAllocation, error)
 	GetGameSeatByPlayer(ctx context.Context, arg GetGameSeatByPlayerParams) (GameSeat, error)
 	GetRegisteredPlayerByNormalizedName(ctx context.Context, normalizedName string) (RegisteredPlayer, error)
 	GetRegisteredPlayerBySessionHash(ctx context.Context, arg GetRegisteredPlayerBySessionHashParams) (RegisteredPlayer, error)
