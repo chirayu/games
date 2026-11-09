@@ -164,3 +164,45 @@ test("random start mode restores a queued player and allocates one shared game",
   await firstContext.close();
   await secondContext.close();
 });
+
+test("explicit bot selection allocates, displays, and plays through the shared game", async ({
+  page,
+}) => {
+  await register(page, "E2E Bot Player");
+  await page.getByRole("button", { name: "Bot", exact: true }).click();
+  const botChoice = page.locator(".bot-choice");
+  await expect(botChoice).toContainText("Balanced Bot");
+  await expect(botChoice).toContainText("balanced");
+  await expect(botChoice).toContainText("full dictionary");
+  await expect(botChoice).toContainText("baseline");
+  await botChoice.getByRole("button", { name: "Play this bot" }).click();
+  await expect(page).toHaveURL(/\/games\//);
+  const gameURL = page.url();
+  await expectVersion(page, 0);
+
+  await page.goto("/lobby");
+  const botSummary = page.getByRole("link", { name: /Balanced Bot/ });
+  await expect(botSummary).toContainText(
+    "Bot · balanced · full dictionary · baseline",
+  );
+  await botSummary.click();
+  await expect(page).toHaveURL(gameURL);
+
+  await playTiles(page, [0, 1, 2], 1);
+  await expect(page.locator(".turn-banner")).toContainText(
+    "Balanced Bot is thinking",
+  );
+  await page.reload();
+
+  await expect
+    .poll(
+      async () => {
+        await page.reload();
+        return page.locator(".board-footer").textContent();
+      },
+      { timeout: 20_000 },
+    )
+    .toContain("State v2");
+  await expect(page.locator(".turn-banner")).toContainText("Your turn");
+  await expect(page.locator(".move-history")).toContainText("Move history (2)");
+});

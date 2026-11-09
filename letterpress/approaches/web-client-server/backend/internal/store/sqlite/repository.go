@@ -354,6 +354,26 @@ func (repository *Repository) GetLatestEnabledBotProfile(ctx context.Context, pl
 	}, nil
 }
 
+// ListLatestEnabledBotProfiles returns safe selectable managed-bot configurations.
+func (repository *Repository) ListLatestEnabledBotProfiles(ctx context.Context) ([]ManagedBot, error) {
+	rows, err := repository.queries.ListLatestEnabledBotProfiles(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list latest enabled bot profiles: %w", err)
+	}
+	bots := make([]ManagedBot, len(rows))
+	for index, row := range rows {
+		bots[index] = ManagedBot{
+			Player: RegisteredPlayer{ID: row.ID, DisplayName: row.DisplayName, NormalizedName: row.NormalizedName, PlayerType: row.PlayerType, CreatedAt: row.CreatedAt},
+			Profile: BotProfile{
+				PlayerID: row.ID, ConfigurationVersion: row.ConfigurationVersion, Style: row.Style,
+				EnglishKnowledgeLevel: row.EnglishKnowledgeLevel, SkillLevel: row.SkillLevel,
+				Enabled: row.Enabled == 1, CreatedAt: row.ProfileCreatedAt,
+			},
+		}
+	}
+	return bots, nil
+}
+
 // AuthenticateBotRuntime resolves a managed bot from a SHA-256 credential hash.
 func (repository *Repository) AuthenticateBotRuntime(ctx context.Context, credentialHash [32]byte) (RegisteredPlayer, error) {
 	row, err := repository.queries.GetBotByRuntimeCredentialHash(ctx, credentialHash[:])
@@ -454,6 +474,9 @@ func (repository *Repository) CreateGameAllocation(ctx context.Context, candidat
 			RequesterID: candidate.RequesterID, AllowedOpponentType: candidate.AllowedOpponentType,
 		})
 	}
+	if errors.Is(err, sql.ErrNoRows) && candidate.Mode == "bot" {
+		row, err = queries.GetEquivalentQueuedBotAllocation(ctx, candidate.RequesterID)
+	}
 	if errors.Is(err, sql.ErrNoRows) && candidate.Mode == "specified" {
 		row, err = queries.GetEquivalentPendingSpecifiedAllocation(ctx, generated.GetEquivalentPendingSpecifiedAllocationParams{
 			RequesterID: candidate.RequesterID, OpponentID: nullableString(candidate.OpponentID),
@@ -466,6 +489,15 @@ func (repository *Repository) CreateGameAllocation(ctx context.Context, candidat
 		return GameAllocation{}, false, fmt.Errorf("commit allocation transaction: %w", err)
 	}
 	return allocationFromRow(row), rows == 1, nil
+}
+
+// GetQueuedBotAllocation returns a recoverable explicit-bot allocation.
+func (repository *Repository) GetQueuedBotAllocation(ctx context.Context, playerID string) (GameAllocation, error) {
+	row, err := repository.queries.GetQueuedBotAllocation(ctx, playerID)
+	if err != nil {
+		return GameAllocation{}, err
+	}
+	return allocationFromRow(row), nil
 }
 
 // GetQueuedRandomAllocation returns a player's durable random-human queue entry.

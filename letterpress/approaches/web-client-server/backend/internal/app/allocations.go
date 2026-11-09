@@ -38,6 +38,13 @@ type GameAllocation struct {
 	UpdatedAt            time.Time  `json:"updatedAt"`
 }
 
+// BotProfilePreference selects a supported managed profile by safe labels, never player ID.
+type BotProfilePreference struct {
+	Style                 string `json:"style"`
+	EnglishKnowledgeLevel string `json:"englishKnowledgeLevel"`
+	SkillLevel            string `json:"skillLevel"`
+}
+
 // ChallengeSummary is a participant-scoped pending specified challenge.
 type ChallengeSummary struct {
 	AllocationID string       `json:"allocationId"`
@@ -52,12 +59,13 @@ type ChallengeSummary struct {
 type LobbyAllocations struct {
 	Items            []ChallengeSummary `json:"items"`
 	RandomAllocation *GameAllocation    `json:"randomAllocation,omitempty"`
+	BotAllocation    *GameAllocation    `json:"botAllocation,omitempty"`
 }
 
 // CreateAllocation creates an idempotent durable request for the authenticated player.
 func (service *Service) CreateAllocation(
-	ctx context.Context,
-	token, idempotencyKey, mode, opponentID string, allowedOpponentTypes []string,
+	ctx context.Context, token, idempotencyKey, mode, opponentID string,
+	allowedOpponentTypes []string, botPreference BotProfilePreference,
 ) (GameAllocation, bool, error) {
 	requester, err := service.CurrentPlayer(ctx, token)
 	if err != nil {
@@ -97,6 +105,11 @@ func (service *Service) CreateAllocation(
 			}
 			allowedOpponentType = "human"
 		} else {
+			bot, selectErr := service.selectManagedBot(ctx, botPreference)
+			if selectErr != nil {
+				return GameAllocation{}, false, selectErr
+			}
+			opponentID = bot.Player.ID
 			allowedOpponentType = "bot"
 		}
 	default:
@@ -129,8 +142,32 @@ func (service *Service) CreateAllocation(
 			return GameAllocation{}, false, err
 		}
 		stored = matched
+	} else if mode == "bot" {
+		completed, completeErr := service.CompleteAllocation(ctx, stored.ID, stored.OpponentID)
+		if completeErr != nil {
+			return GameAllocation{}, false, completeErr
+		}
+		return completed, created, nil
 	}
 	return allocationView(stored), created, nil
+}
+
+func (service *Service) selectManagedBot(ctx context.Context, preference BotProfilePreference) (sqlite.ManagedBot, error) {
+	if preference.Style == "" || preference.EnglishKnowledgeLevel == "" || preference.SkillLevel == "" {
+		return sqlite.ManagedBot{}, ErrInvalidAllocation
+	}
+	bots, err := service.store.ListLatestEnabledBotProfiles(ctx)
+	if err != nil {
+		return sqlite.ManagedBot{}, fmt.Errorf("list selectable bots: %w", err)
+	}
+	for _, bot := range bots {
+		if bot.Profile.Style == preference.Style &&
+			bot.Profile.EnglishKnowledgeLevel == preference.EnglishKnowledgeLevel &&
+			bot.Profile.SkillLevel == preference.SkillLevel {
+			return bot, nil
+		}
+	}
+	return sqlite.ManagedBot{}, ErrInvalidAllocation
 }
 
 func (service *Service) matchRandomAllocation(ctx context.Context, allocation sqlite.GameAllocation) (sqlite.GameAllocation, bool, error) {
@@ -292,6 +329,16 @@ func (service *Service) GetLobbyAllocations(ctx context.Context, token string) (
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		return LobbyAllocations{}, fmt.Errorf("load queued random allocation: %w", err)
 	}
+	queuedBot, err := service.store.GetQueuedBotAllocation(ctx, player.ID)
+	if err == nil {
+		allocation, completeErr := service.CompleteAllocation(ctx, queuedBot.ID, queuedBot.OpponentID)
+		if completeErr != nil {
+			return LobbyAllocations{}, fmt.Errorf("recover queued bot allocation: %w", completeErr)
+		}
+		result.BotAllocation = &allocation
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return LobbyAllocations{}, fmt.Errorf("load queued bot allocation: %w", err)
+	}
 	return result, nil
 }
 
@@ -338,6 +385,17 @@ func (service *Service) CompleteAllocation(ctx context.Context, allocationID, op
 	seats := [2]sqlite.GameSeat{
 		{GameID: gameID, Seat: 1, PlayerID: stored.RequesterID, CreatedAt: now},
 		{GameID: gameID, Seat: 2, PlayerID: opponentID, CreatedAt: now},
+	}
+	if stored.Mode == "bot" {
+		managed, profileErr := service.store.GetLatestEnabledBotProfile(ctx, opponentID)
+		if profileErr != nil || managed.Player.PlayerType != "bot" {
+			return GameAllocation{}, ErrInvalidAllocation
+		}
+		seats[1].BotProfile = &sqlite.BotProfileSnapshot{
+			ConfigurationVersion: managed.Profile.ConfigurationVersion,
+			Style:                managed.Profile.Style, EnglishKnowledgeLevel: managed.Profile.EnglishKnowledgeLevel,
+			SkillLevel: managed.Profile.SkillLevel,
+		}
 	}
 	completed, err := service.store.CompleteGameAllocation(ctx, allocationID, opponentID, gameRow, seats)
 	if errors.Is(err, sqlite.ErrAllocationTransition) {

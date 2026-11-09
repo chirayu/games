@@ -209,11 +209,13 @@ requester exclusively from the application session and requires an
 with the same mode and opponent returns the original allocation; reusing it for
 different input returns a conflict.
 
-Allocation modes are `specified`, `random`, and the reserved `bot` mode. Their
+Allocation modes are `specified`, `random`, and `bot`. Their
 durable states are `pending_acceptance`, `queued`, `allocated`, `declined`,
 `cancelled`, `expired`, and `failed`. Terminal states cannot be reopened.
-Specified requests begin pending acceptance; random and reserved bot requests
-begin queued. Bot selection is not implemented yet.
+Specified requests begin pending acceptance; random requests begin queued. Bot
+requests select an enabled managed profile by exact safe style, English-
+knowledge, and skill preferences, then auto-accept and allocate immediately.
+They never accept a managed-player ID from the browser.
 
 `GET /api/v1/game-allocations/{id}` is private to the requester and intended
 opponent. Unrelated players receive the same not-found response as an unknown
@@ -242,9 +244,11 @@ and cancellable. This durable queue survives restart and cannot silently replace
 a requested human with a bot. The lobby polls its allocation status while
 visible and navigates through the normal game route after a match.
 
-The lobby exposes one Start game flow with Specific player and Random player
-choices. The former reuses registered-player search; the latter uses the same
-durable random allocation after retries or reloads. A partial unique index also
+The lobby exposes one Start game flow with Specific player, Random player, and
+Bot choices. The first reuses registered-player search; Random uses the same
+durable human-only allocation after retries or reloads. Bot first lists enabled
+safe profile labels, requires an explicit confirmation, and navigates to its
+immediately allocated game. A partial unique index also
 permits only one live specified challenge for a requester/opponent pair, so a
 retry with a new idempotency key returns the existing challenge. Allocated games
 recover through the participant-scoped active-game list. No frontend route or
@@ -256,6 +260,14 @@ commit. The requester deterministically receives seat 1 and the resolved
 opponent seat 2. Repeated or concurrent completion returns the single existing
 game. The domain engine receives only those resolved seats and remains unaware
 of allocation mode.
+
+Bot allocation assigns the human to seat 1 and the selected registered bot to
+seat 2. Completion snapshots the enabled profile onto the ordinary bot seat in
+the same transaction that creates the game and marks the allocation allocated.
+A partial unique index and lobby recovery complete a queued bot allocation if a
+process stops between durable request creation and completion. Same-key retries
+return the one original game. Random-human matching continues to require the
+explicit `human` opponent type and never substitutes a bot.
 
 `GET /api/v1/games/{gameID}` authenticates the application-wide player session,
 requires that registered player to hold a game seat, and returns the current

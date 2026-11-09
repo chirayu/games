@@ -269,6 +269,26 @@ h1 {
   gap: 0.65rem;
 }
 
+.bot-selection {
+  max-width: 42rem;
+}
+
+.bot-choice {
+  align-items: center;
+  background: #fffdf7;
+  border: 1px solid rgb(82 66 43 / 16%);
+  border-radius: 0.85rem;
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+  padding: 1rem;
+}
+
+.bot-choice p {
+  color: var(--ink-muted);
+  margin: 0.35rem 0 0;
+}
+
 .text-action {
   background: transparent;
   border: 0;

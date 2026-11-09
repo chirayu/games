@@ -222,6 +222,33 @@ func (q *Queries) GetEquivalentPendingSpecifiedAllocation(ctx context.Context, a
 	return i, err
 }
 
+const getEquivalentQueuedBotAllocation = `-- name: GetEquivalentQueuedBotAllocation :one
+SELECT id, requester_id, opponent_id, mode, allowed_opponent_type, state, idempotency_key, game_id, failure_reason, expires_at, created_at, updated_at FROM game_allocations
+WHERE requester_id = ? AND mode = 'bot' AND state = 'queued'
+ORDER BY created_at ASC, id ASC
+LIMIT 1
+`
+
+func (q *Queries) GetEquivalentQueuedBotAllocation(ctx context.Context, requesterID string) (GameAllocation, error) {
+	row := q.db.QueryRowContext(ctx, getEquivalentQueuedBotAllocation, requesterID)
+	var i GameAllocation
+	err := row.Scan(
+		&i.ID,
+		&i.RequesterID,
+		&i.OpponentID,
+		&i.Mode,
+		&i.AllowedOpponentType,
+		&i.State,
+		&i.IdempotencyKey,
+		&i.GameID,
+		&i.FailureReason,
+		&i.ExpiresAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getEquivalentQueuedRandomAllocation = `-- name: GetEquivalentQueuedRandomAllocation :one
 SELECT id, requester_id, opponent_id, mode, allowed_opponent_type, state, idempotency_key, game_id, failure_reason, expires_at, created_at, updated_at FROM game_allocations
 WHERE requester_id = ? AND mode = 'random' AND allowed_opponent_type = ? AND state = 'queued'
@@ -289,6 +316,33 @@ type GetGameAllocationByRequesterKeyParams struct {
 
 func (q *Queries) GetGameAllocationByRequesterKey(ctx context.Context, arg GetGameAllocationByRequesterKeyParams) (GameAllocation, error) {
 	row := q.db.QueryRowContext(ctx, getGameAllocationByRequesterKey, arg.RequesterID, arg.IdempotencyKey)
+	var i GameAllocation
+	err := row.Scan(
+		&i.ID,
+		&i.RequesterID,
+		&i.OpponentID,
+		&i.Mode,
+		&i.AllowedOpponentType,
+		&i.State,
+		&i.IdempotencyKey,
+		&i.GameID,
+		&i.FailureReason,
+		&i.ExpiresAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getQueuedBotAllocation = `-- name: GetQueuedBotAllocation :one
+SELECT id, requester_id, opponent_id, mode, allowed_opponent_type, state, idempotency_key, game_id, failure_reason, expires_at, created_at, updated_at FROM game_allocations
+WHERE requester_id = ? AND mode = 'bot' AND state = 'queued'
+ORDER BY created_at ASC, id ASC
+LIMIT 1
+`
+
+func (q *Queries) GetQueuedBotAllocation(ctx context.Context, requesterID string) (GameAllocation, error) {
+	row := q.db.QueryRowContext(ctx, getQueuedBotAllocation, requesterID)
 	var i GameAllocation
 	err := row.Scan(
 		&i.ID,

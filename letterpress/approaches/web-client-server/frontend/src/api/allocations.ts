@@ -6,6 +6,7 @@ export interface GameAllocation {
   requesterId: string;
   opponentId?: string;
   mode: "specified" | "random" | "bot";
+  allowedOpponentTypes?: Array<"human" | "bot">;
   state:
     | "pending_acceptance"
     | "queued"
@@ -30,6 +31,17 @@ export interface ChallengeSummary {
 export interface LobbyAllocations {
   items: ChallengeSummary[];
   randomAllocation?: GameAllocation;
+  botAllocation?: GameAllocation;
+}
+
+export interface BotProfilePreference {
+  style: string;
+  englishKnowledgeLevel: string;
+  skillLevel: string;
+}
+
+export interface BotProfilePage {
+  items: PublicPlayer[];
 }
 
 export function createSpecifiedChallenge(
@@ -56,6 +68,24 @@ export function createRandomHumanAllocation(): Promise<GameAllocation> {
       mode: "random",
       allowedOpponentTypes: ["human"],
     }),
+  });
+}
+
+export function getBotProfiles(): Promise<BotProfilePage> {
+  return request<BotProfilePage>("/api/v1/bot-profiles", { method: "GET" });
+}
+
+export function createBotAllocation(
+  botProfile: BotProfilePreference,
+  idempotencyKey: string,
+): Promise<GameAllocation> {
+  return request<GameAllocation>("/api/v1/game-allocations", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Idempotency-Key": idempotencyKey,
+    },
+    body: JSON.stringify({ mode: "bot", botProfile }),
   });
 }
 

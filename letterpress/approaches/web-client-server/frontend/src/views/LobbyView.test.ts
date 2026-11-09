@@ -238,6 +238,102 @@ describe("LobbyView", () => {
     expect(push).toHaveBeenCalledWith("/games/random-game");
   });
 
+  it("shows safe bot profile labels and opens an immediate bot game", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        response(200, { data: { id: "p1", name: "Alice" } }),
+      )
+      .mockResolvedValueOnce(response(200, { data: { items: [] } }))
+      .mockResolvedValueOnce(response(200, { data: { items: [] } }))
+      .mockResolvedValueOnce(
+        response(200, {
+          data: {
+            items: [
+              {
+                id: "bot-balanced-v1",
+                name: "Balanced Bot",
+                type: "bot",
+                botProfile: {
+                  configurationVersion: 1,
+                  style: "balanced",
+                  englishKnowledgeLevel: "full_dictionary",
+                  skillLevel: "baseline",
+                },
+              },
+            ],
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        response(201, {
+          data: {
+            id: "bot-allocation",
+            mode: "bot",
+            state: "allocated",
+            gameId: "bot-game",
+          },
+        }),
+      );
+    await establishAlice(fetchMock);
+    const wrapper = mountLobby();
+    await flushPromises();
+
+    await wrapper.get(".bot-start-choice").trigger("click");
+    await flushPromises();
+    expect(wrapper.get(".bot-choice").text()).toContain("Balanced Bot");
+    expect(wrapper.get(".bot-choice").text()).toContain("balanced");
+    expect(wrapper.get(".bot-choice").text()).toContain("full dictionary");
+    expect(wrapper.get(".bot-choice").text()).toContain("baseline");
+
+    await wrapper.get(".bot-choice .primary-action").trigger("click");
+    await flushPromises();
+    const [path, request] = fetchMock.mock.calls.at(-1)!;
+    expect(path).toBe("/api/v1/game-allocations");
+    expect(request.headers["Idempotency-Key"]).toBeTruthy();
+    expect(JSON.parse(request.body)).toEqual({
+      mode: "bot",
+      botProfile: {
+        style: "balanced",
+        englishKnowledgeLevel: "full_dictionary",
+        skillLevel: "baseline",
+      },
+    });
+    expect(push).toHaveBeenCalledWith("/games/bot-game");
+  });
+
+  it("shows safe bot labels in ordinary game summaries", async () => {
+    const games = structuredClone(activeGames) as {
+      data: { items: Array<Record<string, unknown>> };
+    };
+    games.data.items[1].opponent = {
+      id: "bot-balanced-v1",
+      name: "Balanced Bot",
+      type: "bot",
+      botProfile: {
+        configurationVersion: 1,
+        style: "balanced",
+        englishKnowledgeLevel: "full_dictionary",
+        skillLevel: "baseline",
+      },
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        response(200, { data: { id: "p1", name: "Alice" } }),
+      )
+      .mockResolvedValueOnce(response(200, games))
+      .mockResolvedValueOnce(response(200, { data: { items: [] } }));
+    await establishAlice(fetchMock);
+    const wrapper = mountLobby();
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("Balanced Bot");
+    expect(wrapper.text()).toContain(
+      "Bot · balanced · full dictionary · baseline · Their move",
+    );
+  });
+
   it("shows and cancels a pending random queue entry", async () => {
     const queued = {
       id: "random-queued",

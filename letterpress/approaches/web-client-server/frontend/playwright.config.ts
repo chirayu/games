@@ -25,6 +25,11 @@ export default defineConfig({
       timeout: 120_000,
     },
     {
+      command: `cd ../backend && until curl -fsS http://127.0.0.1:8080/healthz >/dev/null; do sleep 0.2; done; GOCACHE=/tmp/letterpress-e2e-go-cache LETTERPRESS_BOT_TOKEN=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA go run ./cmd/bot-runtime -db ${databasePath} -api-base-url http://127.0.0.1:8080 -poll-interval 200ms`,
+      reuseExistingServer: false,
+      timeout: 120_000,
+    },
+    {
       command: "pnpm dev --host 127.0.0.1",
       url: "http://127.0.0.1:5173",
       reuseExistingServer: false,

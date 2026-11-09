@@ -43,6 +43,7 @@ func NewHandler(service *app.Service, config Config) http.Handler {
 	mux.HandleFunc("DELETE /api/v1/player-sessions/current", handler.logoutPlayer)
 	mux.HandleFunc("GET /api/v1/players/me", handler.currentPlayer)
 	mux.HandleFunc("GET /api/v1/players", handler.searchPlayers)
+	mux.HandleFunc("GET /api/v1/bot-profiles", handler.listBotProfiles)
 	mux.HandleFunc("GET /api/v1/games", handler.listActiveGames)
 	mux.HandleFunc("GET /api/v1/games/{gameID}", handler.getGame)
 	mux.HandleFunc("POST /api/v1/games/{gameID}/moves", handler.submitMove)
@@ -244,6 +245,19 @@ func (handler *handler) searchPlayers(response http.ResponseWriter, request *htt
 	}
 }
 
+func (handler *handler) listBotProfiles(response http.ResponseWriter, request *http.Request) {
+	response.Header().Set("Cache-Control", "no-store")
+	profiles, err := handler.service.ListBotProfiles(request.Context(), handler.playerSessionToken(request))
+	switch {
+	case errors.Is(err, app.ErrInvalidPlayerSession):
+		writeError(response, http.StatusUnauthorized, "player_session_required", "a valid player session is required")
+	case err != nil:
+		writeError(response, http.StatusInternalServerError, "internal_error", "could not list bot profiles")
+	default:
+		writeJSON(response, http.StatusOK, map[string]any{"data": map[string]any{"items": profiles}})
+	}
+}
+
 func pageLimit(request *http.Request) (int, bool) {
 	raw := request.URL.Query().Get("limit")
 	if raw == "" {
@@ -260,9 +274,10 @@ func (handler *handler) createAllocation(response http.ResponseWriter, request *
 		return
 	}
 	var input struct {
-		Mode                 string   `json:"mode"`
-		OpponentID           string   `json:"opponentId"`
-		AllowedOpponentTypes []string `json:"allowedOpponentTypes"`
+		Mode                 string                   `json:"mode"`
+		OpponentID           string                   `json:"opponentId"`
+		AllowedOpponentTypes []string                 `json:"allowedOpponentTypes"`
+		BotProfile           app.BotProfilePreference `json:"botProfile"`
 	}
 	decoder := json.NewDecoder(http.MaxBytesReader(response, request.Body, 4096))
 	decoder.DisallowUnknownFields()
@@ -276,7 +291,7 @@ func (handler *handler) createAllocation(response http.ResponseWriter, request *
 	}
 	allocation, created, err := handler.service.CreateAllocation(
 		request.Context(), handler.playerSessionToken(request), request.Header.Get("Idempotency-Key"),
-		input.Mode, input.OpponentID, input.AllowedOpponentTypes,
+		input.Mode, input.OpponentID, input.AllowedOpponentTypes, input.BotProfile,
 	)
 	if handler.writeAllocationError(response, err) {
 		return

@@ -175,8 +175,9 @@ compatibility path.
 Managed bots now have stable registered-player identities, immutable versioned
 profiles, hash-only runtime credentials, and historical profile snapshots on
 ordinary game seats. Legal move search, the versioned balanced policy, and a
-restart-safe REST bot worker are in place. Explicit bot allocation remains the
-next ticket.
+restart-safe REST bot worker are in place. Players can explicitly inspect the
+safe Balanced Bot profile, allocate one bot game immediately, see profile labels
+in the normal lobby, and watch bot turns advance through the shared game API.
 
 ## Documentation
 

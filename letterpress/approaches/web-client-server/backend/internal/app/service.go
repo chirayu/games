@@ -39,6 +39,8 @@ type Store interface {
 	GetRegisteredPlayerBySessionHash(context.Context, [32]byte, time.Time) (sqlite.RegisteredPlayer, error)
 	AuthenticateBotRuntime(context.Context, [32]byte) (sqlite.RegisteredPlayer, error)
 	GetRegisteredPlayerByID(context.Context, string) (sqlite.RegisteredPlayer, error)
+	GetLatestEnabledBotProfile(context.Context, string) (sqlite.ManagedBot, error)
+	ListLatestEnabledBotProfiles(context.Context) ([]sqlite.ManagedBot, error)
 	DeletePlayerSession(context.Context, [32]byte) error
 	CreateGameAllocation(context.Context, sqlite.GameAllocation) (sqlite.GameAllocation, bool, error)
 	GetGameAllocation(context.Context, string) (sqlite.GameAllocation, error)
@@ -47,6 +49,7 @@ type Store interface {
 	DeclineSpecifiedAllocation(context.Context, string, string, time.Time) (sqlite.GameAllocation, error)
 	ListPendingSpecifiedChallenges(context.Context, string, time.Time, int) ([]sqlite.SpecifiedChallenge, error)
 	GetQueuedRandomAllocation(context.Context, string, string, time.Time) (sqlite.GameAllocation, error)
+	GetQueuedBotAllocation(context.Context, string) (sqlite.GameAllocation, error)
 	MatchRandomAllocation(context.Context, string, sqlite.Game) (sqlite.GameAllocation, bool, error)
 	CompleteGameAllocation(context.Context, string, string, sqlite.Game, [2]sqlite.GameSeat) (sqlite.GameAllocation, error)
 	CreateGame(context.Context, sqlite.Game, [2]sqlite.GameSeat) error

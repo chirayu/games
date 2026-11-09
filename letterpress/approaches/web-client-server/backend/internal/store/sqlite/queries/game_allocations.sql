@@ -16,6 +16,12 @@ WHERE requester_id = ? AND mode = 'random' AND allowed_opponent_type = ? AND sta
 ORDER BY created_at ASC, id ASC
 LIMIT 1;
 
+-- name: GetEquivalentQueuedBotAllocation :one
+SELECT * FROM game_allocations
+WHERE requester_id = ? AND mode = 'bot' AND state = 'queued'
+ORDER BY created_at ASC, id ASC
+LIMIT 1;
+
 -- name: GetEquivalentPendingSpecifiedAllocation :one
 SELECT * FROM game_allocations
 WHERE requester_id = ? AND opponent_id = ?
@@ -27,6 +33,12 @@ LIMIT 1;
 SELECT * FROM game_allocations
 WHERE requester_id = ? AND mode = 'random'
   AND allowed_opponent_type = ? AND state = 'queued'
+ORDER BY created_at ASC, id ASC
+LIMIT 1;
+
+-- name: GetQueuedBotAllocation :one
+SELECT * FROM game_allocations
+WHERE requester_id = ? AND mode = 'bot' AND state = 'queued'
 ORDER BY created_at ASC, id ASC
 LIMIT 1;
 

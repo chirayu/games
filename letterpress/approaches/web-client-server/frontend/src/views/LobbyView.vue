@@ -6,10 +6,12 @@ import { getActiveGames, type ActiveGameSummary } from "../api/games";
 import {
   acceptChallenge,
   cancelChallenge,
+  createBotAllocation,
   createRandomHumanAllocation,
   createSpecifiedChallenge,
   declineChallenge,
   getAllocation,
+  getBotProfiles,
   getLobbyAllocations,
   type ChallengeSummary,
   type GameAllocation,
@@ -39,7 +41,12 @@ const challengeBusy = ref("");
 const randomAllocation = ref<GameAllocation>();
 const randomBusy = ref(false);
 const randomError = ref("");
-const startMode = ref<"specific" | "random">();
+const botProfiles = ref<PublicPlayer[]>([]);
+const botState = ref<"idle" | "loading" | "ready" | "error">("idle");
+const botBusy = ref("");
+const botError = ref("");
+const botIdempotencyKey = ref("");
+const startMode = ref<"specific" | "random" | "bot">();
 let randomPoll: number | undefined;
 
 const incomingChallenges = computed(() =>
@@ -83,6 +90,51 @@ async function joinRandomQueue() {
     randomError.value = "Random matchmaking could not start. Try again.";
   } finally {
     randomBusy.value = false;
+  }
+}
+
+async function chooseStartMode(mode: "specific" | "random" | "bot") {
+  startMode.value = mode;
+  if (mode === "bot" && botState.value === "idle") await loadBotProfiles();
+}
+
+async function loadBotProfiles() {
+  botState.value = "loading";
+  botError.value = "";
+  try {
+    botProfiles.value = (await getBotProfiles()).items;
+    botState.value = "ready";
+  } catch {
+    botState.value = "error";
+    botError.value = "Bot choices could not be loaded. Try again.";
+  }
+}
+
+async function startBotGame(bot: PublicPlayer) {
+  if (!bot.botProfile) return;
+  botBusy.value = bot.id;
+  botError.value = "";
+  if (!botIdempotencyKey.value) botIdempotencyKey.value = crypto.randomUUID();
+  try {
+    const allocation = await createBotAllocation(
+      {
+        style: bot.botProfile.style,
+        englishKnowledgeLevel: bot.botProfile.englishKnowledgeLevel,
+        skillLevel: bot.botProfile.skillLevel,
+      },
+      botIdempotencyKey.value,
+    );
+    if (allocation.state === "allocated" && allocation.gameId) {
+      botIdempotencyKey.value = "";
+      await router.push(`/games/${allocation.gameId}`);
+      return;
+    }
+    botError.value =
+      "The bot game is still being allocated. Refresh to recover it.";
+  } catch {
+    botError.value = "The bot game could not be started. Retry safely.";
+  } finally {
+    botBusy.value = "";
   }
 }
 
@@ -144,6 +196,12 @@ async function loadChallenges() {
       if (randomPoll === undefined) {
         randomPoll = window.setInterval(pollRandomAllocation, 5000);
       }
+    }
+    if (
+      allocations.botAllocation?.state === "allocated" &&
+      allocations.botAllocation.gameId
+    ) {
+      await router.push(`/games/${allocations.botAllocation.gameId}`);
     }
   } catch (error) {
     if (error instanceof APIError && error.status === 401) {
@@ -302,16 +360,23 @@ async function logout() {
           <button
             class="primary-action"
             type="button"
-            @click="startMode = 'specific'"
+            @click="chooseStartMode('specific')"
           >
             Specific player
           </button>
           <button
             class="secondary-action"
             type="button"
-            @click="startMode = 'random'"
+            @click="chooseStartMode('random')"
           >
             Random player
+          </button>
+          <button
+            class="secondary-action bot-start-choice"
+            type="button"
+            @click="chooseStartMode('bot')"
+          >
+            Bot
           </button>
         </div>
         <button
@@ -322,6 +387,53 @@ async function logout() {
         >
           Back to choices
         </button>
+      </section>
+
+      <section
+        v-if="startMode === 'bot'"
+        class="bot-selection"
+        aria-labelledby="bot-title"
+      >
+        <h2 id="bot-title" class="section-title">Bot opponent</h2>
+        <p v-if="botState === 'loading'" role="status">Loading bot choices…</p>
+        <button
+          v-else-if="botState === 'error'"
+          class="secondary-action"
+          type="button"
+          @click="loadBotProfiles"
+        >
+          Retry bot choices
+        </button>
+        <p v-else-if="botProfiles.length === 0" class="notice">
+          No bot profiles are currently available.
+        </p>
+        <article
+          v-for="bot in botProfiles"
+          v-else
+          :key="bot.id"
+          class="bot-choice"
+          :data-bot-id="bot.id"
+        >
+          <div>
+            <strong>{{ bot.name }}</strong>
+            <p v-if="bot.botProfile">
+              Style: {{ bot.botProfile.style }} · English:
+              {{ bot.botProfile.englishKnowledgeLevel.replaceAll("_", " ") }}
+              · Skill: {{ bot.botProfile.skillLevel }}
+            </p>
+          </div>
+          <button
+            class="primary-action"
+            type="button"
+            :disabled="botBusy !== ''"
+            @click="startBotGame(bot)"
+          >
+            {{ botBusy === bot.id ? "Starting…" : "Play this bot" }}
+          </button>
+        </article>
+        <p v-if="botError" class="notice notice--error" role="alert">
+          {{ botError }}
+        </p>
       </section>
 
       <section
@@ -362,7 +474,7 @@ async function logout() {
         aria-labelledby="empty-title"
       >
         <h2 id="empty-title">No active games yet.</h2>
-        <p>Find another player below and send them a challenge.</p>
+        <p>Choose a specific player, a random human, or a bot above.</p>
       </section>
 
       <p v-if="challengeError" class="notice notice--error" role="alert">
@@ -437,8 +549,19 @@ async function logout() {
             <strong>{{ game.opponent.name }}</strong>
             <span>{{ game.scores.playerOne }}–{{ game.scores.playerTwo }}</span>
             <small
-              >{{ game.opponent.type === "bot" ? "Bot" : "Player" }} · Your
-              move</small
+              >{{ game.opponent.type === "bot" ? "Bot" : "Player"
+              }}<template v-if="game.opponent.botProfile">
+                · {{ game.opponent.botProfile.style }} ·
+                {{
+                  game.opponent.botProfile.englishKnowledgeLevel.replaceAll(
+                    "_",
+                    " ",
+                  )
+                }}
+                ·
+                {{ game.opponent.botProfile.skillLevel }}</template
+              >
+              · Your move</small
             >
           </RouterLink>
         </div>
@@ -456,8 +579,19 @@ async function logout() {
             <strong>{{ game.opponent.name }}</strong>
             <span>{{ game.scores.playerOne }}–{{ game.scores.playerTwo }}</span>
             <small
-              >{{ game.opponent.type === "bot" ? "Bot" : "Player" }} · Their
-              move</small
+              >{{ game.opponent.type === "bot" ? "Bot" : "Player"
+              }}<template v-if="game.opponent.botProfile">
+                · {{ game.opponent.botProfile.style }} ·
+                {{
+                  game.opponent.botProfile.englishKnowledgeLevel.replaceAll(
+                    "_",
+                    " ",
+                  )
+                }}
+                ·
+                {{ game.opponent.botProfile.skillLevel }}</template
+              >
+              · Their move</small
             >
           </RouterLink>
         </div>

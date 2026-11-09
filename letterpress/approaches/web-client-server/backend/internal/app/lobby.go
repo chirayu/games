@@ -42,6 +42,28 @@ type PublicBotProfile struct {
 	SkillLevel            string `json:"skillLevel"`
 }
 
+// ListBotProfiles returns enabled safe bot choices to an authenticated human.
+func (service *Service) ListBotProfiles(ctx context.Context, token string) ([]PublicPlayer, error) {
+	if _, err := service.CurrentPlayer(ctx, token); err != nil {
+		return nil, err
+	}
+	bots, err := service.store.ListLatestEnabledBotProfiles(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list bot profiles: %w", err)
+	}
+	choices := make([]PublicPlayer, len(bots))
+	for index, bot := range bots {
+		choices[index] = PublicPlayer{
+			ID: bot.Player.ID, Name: bot.Player.DisplayName, Type: "bot",
+			BotProfile: &PublicBotProfile{
+				ConfigurationVersion: bot.Profile.ConfigurationVersion, Style: bot.Profile.Style,
+				EnglishKnowledgeLevel: bot.Profile.EnglishKnowledgeLevel, SkillLevel: bot.Profile.SkillLevel,
+			},
+		}
+	}
+	return choices, nil
+}
+
 // ActiveGameSummary is the compact participant-scoped lobby representation.
 type ActiveGameSummary struct {
 	ID           string       `json:"id"`

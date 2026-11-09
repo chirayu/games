@@ -56,10 +56,96 @@ func TestAllocationAPIIsIdempotentPrivateAndCancellable(t *testing.T) {
 
 	random := createAllocationRequest(t, handler, aliceCookie, "random-1", "random", "", http.StatusCreated)
 	bot := createAllocationRequest(t, handler, aliceCookie, "bot-1", "bot", "", http.StatusCreated)
-	if random.State != "queued" || bot.State != "queued" {
+	if random.State != "queued" || bot.State != "allocated" || bot.GameID == "" {
 		t.Fatalf("reserved allocation states = %q/%q", random.State, bot.State)
 	}
 	createAllocationRequest(t, handler, nil, "anonymous", "random", "", http.StatusUnauthorized)
+}
+
+func TestBotProfileSelectionAllocatesImmediatelyAndIsIdempotent(t *testing.T) {
+	handler, repository, _ := newIntegrationHandler(t, true)
+	alice, aliceCookie := loginLobbyPlayer(t, handler, "Alice")
+
+	request := httptest.NewRequest(http.MethodGet, testOrigin+"/api/v1/bot-profiles", nil)
+	request.AddCookie(aliceCookie)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("list bot profiles = %d: %s", response.Code, response.Body.String())
+	}
+	var profiles struct {
+		Data struct {
+			Items []app.PublicPlayer `json:"items"`
+		} `json:"data"`
+	}
+	decodeResponse(t, response, &profiles)
+	if len(profiles.Data.Items) != 1 || profiles.Data.Items[0].ID != "bot-balanced-v1" || profiles.Data.Items[0].BotProfile == nil {
+		t.Fatalf("bot profiles = %#v", profiles.Data.Items)
+	}
+
+	allocated := createAllocationRequest(t, handler, aliceCookie, "bot-game", "bot", "", http.StatusCreated)
+	if allocated.State != "allocated" || allocated.GameID == "" || allocated.OpponentID != "bot-balanced-v1" {
+		t.Fatalf("bot allocation = %#v", allocated)
+	}
+	retried := createAllocationRequest(t, handler, aliceCookie, "bot-game", "bot", "", http.StatusOK)
+	if retried.ID != allocated.ID || retried.GameID != allocated.GameID {
+		t.Fatalf("idempotent bot retry = %#v, want game %q", retried, allocated.GameID)
+	}
+	seats, err := repository.ListGameSeats(context.Background(), allocated.GameID)
+	if err != nil || len(seats) != 2 || seats[0].PlayerID != alice.ID || seats[1].PlayerID != "bot-balanced-v1" || seats[1].BotProfile == nil {
+		t.Fatalf("bot seats = %#v, err %v", seats, err)
+	}
+	summaries, err := repository.ListActiveGamesForPlayer(
+		context.Background(), alice.ID, time.Date(9999, 12, 31, 0, 0, 0, 0, time.UTC), "\uffff", 10,
+	)
+	if err != nil || len(summaries) != 1 || summaries[0].OpponentType != "bot" ||
+		summaries[0].OpponentBotProfile == nil || summaries[0].OpponentBotProfile.Style != "balanced" {
+		t.Fatalf("bot lobby summaries = %#v, err %v", summaries, err)
+	}
+	view := loadGame(t, handler, allocated.GameID, aliceCookie)
+	if view.PlayerSeat != 1 || view.ActivePlayerMetadata.PlayerType != "human" {
+		t.Fatalf("initial bot game view = %#v", view)
+	}
+	decodeGameView(t, submitMove(t, handler, allocated.GameID, aliceCookie, []int{0}, 0), http.StatusOK)
+	pending, err := repository.ListPendingBotTurns(context.Background(), "bot-balanced-v1", 10)
+	if err != nil || len(pending) != 1 || pending[0].GameID != allocated.GameID || pending[0].Style != "balanced" {
+		t.Fatalf("pending bot turns = %#v, err %v", pending, err)
+	}
+
+	unsupportedBody, _ := json.Marshal(map[string]any{
+		"mode": "bot",
+		"botProfile": map[string]string{
+			"style": "unknown", "englishKnowledgeLevel": "full_dictionary", "skillLevel": "baseline",
+		},
+	})
+	unsupported := newMutationRequest(http.MethodPost, "/api/v1/game-allocations", bytes.NewReader(unsupportedBody))
+	unsupported.Header.Set("Content-Type", "application/json")
+	unsupported.Header.Set("Idempotency-Key", "unsupported-bot")
+	unsupported.AddCookie(aliceCookie)
+	unsupportedResponse := httptest.NewRecorder()
+	handler.ServeHTTP(unsupportedResponse, unsupported)
+	assertAPIError(t, unsupportedResponse, http.StatusUnprocessableEntity, "invalid_allocation")
+}
+
+func TestLobbyReloadRecoversQueuedBotAllocation(t *testing.T) {
+	handler, repository, now := newIntegrationHandler(t, true)
+	alice, aliceCookie := loginLobbyPlayer(t, handler, "Alice")
+	queued, created, err := repository.CreateGameAllocation(context.Background(), sqlite.GameAllocation{
+		ID: "queued-bot-recovery", RequesterID: alice.ID, OpponentID: "bot-balanced-v1",
+		Mode: "bot", AllowedOpponentType: "bot", State: "queued", IdempotencyKey: "lost-response",
+		CreatedAt: now, UpdatedAt: now,
+	})
+	if err != nil || !created || queued.State != "queued" {
+		t.Fatalf("seed queued bot allocation = %#v, created %t, err %v", queued, created, err)
+	}
+	restored := lobbyAllocations(t, handler, aliceCookie).BotAllocation
+	if restored == nil || restored.State != "allocated" || restored.GameID == "" {
+		t.Fatalf("restored bot allocation = %#v", restored)
+	}
+	seats, err := repository.ListGameSeats(context.Background(), restored.GameID)
+	if err != nil || len(seats) != 2 || seats[1].BotProfile == nil {
+		t.Fatalf("recovered bot seats = %#v, err %v", seats, err)
+	}
 }
 
 func TestConcurrentAllocationCompletionCreatesOneAccessibleGame(t *testing.T) {
@@ -425,6 +511,9 @@ func createAllocationRequest(
 	body, _ := json.Marshal(map[string]any{
 		"mode": mode, "opponentId": opponentID,
 		"allowedOpponentTypes": map[bool][]string{true: {"human"}, false: nil}[mode == "random"],
+		"botProfile": map[bool]map[string]string{true: {
+			"style": "balanced", "englishKnowledgeLevel": "full_dictionary", "skillLevel": "baseline",
+		}, false: nil}[mode == "bot"],
 	})
 	request := newMutationRequest(http.MethodPost, "/api/v1/game-allocations", bytes.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
