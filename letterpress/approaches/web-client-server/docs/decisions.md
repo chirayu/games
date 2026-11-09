@@ -21,9 +21,15 @@ ticket intentionally changes one.
    Canadian, and Australian spellings at variant level 1. Normalize the
    generated artifact to uppercase A–Z, preserve duplicate-word and prefix
    restrictions, and make dictionary updates explicit and reproducible.
-6. **MVP board generation.** Generate each position independently and uniformly
-   from A–Z. Letters behave literally. Alternative generators plug into
-   `BoardGenerator`.
+6. **Constrained weighted board generation.** Every new 5×5 game uses the
+   playable-board policy in the root game rules: choose 5–7 vowels, draw vowels
+   and consonants with the documented English-frequency weights, cap the
+   combined `J Q X Z` count at two and each individual letter at four, then
+   shuffle the complete bag. A capped letter is excluded from subsequent draws.
+   Production sampling uses cryptographically secure randomness and unbiased
+   bounded selection. Letters remain literal, including `Q`. The strategy stays
+   behind `BoardGenerator`; persisted boards are never regenerated. This
+   intentionally supersedes independent uniform A–Z selection.
 7. **Player identity.** Use a stable registered-player record with a unique,
    case-insensitive name. Name entry is intentionally both registration and
    login from any browser, with no password or ownership proof. Each login gets

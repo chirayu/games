@@ -22,6 +22,16 @@ move validation, word derivation, ownership, protection, turns, scoring, and
 completion. Replaceable `WordValidator` and `BoardGenerator` interfaces isolate
 dictionary and board-generation strategies.
 
+The production `BoardGenerator` creates only the default 5×5 board. It first
+builds the constrained weighted bag defined by the root game rules, excluding a
+letter after its per-letter cap is reached and excluding `J Q X Z` after their
+combined cap is reached. It then applies an unbiased Fisher–Yates shuffle.
+Production entropy comes from the operating system's cryptographically secure
+source; tests inject deterministic entropy behind the same interface. Game
+allocation modes share the application service's generator, so specified,
+random-human, and bot games receive the same policy. The generator is used only
+when a game is created and never rewrites a persisted board.
+
 The production `WordValidator` is an embedded, immutable ESDB/SCOWL size-80
 lexicon covering American, British, Canadian, and Australian spellings. The
 build embeds the checksum-verified, sorted A–Z artifact; startup validates it

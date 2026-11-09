@@ -6,6 +6,31 @@ tiles remain, and the player who owns the most tiles wins.
 
 The first implementation uses a 5×5 grid.
 
+## Board generation
+
+New 5×5 games use a constrained, weighted 25-letter bag. Persisted games keep
+their original board unchanged.
+
+- Choose the vowel count uniformly from 5, 6, or 7. `A E I O U` are vowels;
+  `Y` is a consonant.
+- Draw vowels with weights `A:82 E:127 I:70 O:75 U:28`.
+- Draw other tiles with consonant weights
+  `B:15 C:28 D:43 F:22 G:20 H:61 J:2 K:8 L:40 M:24 N:67 P:19 Q:1`
+  `R:60 S:63 T:91 V:10 W:24 X:2 Y:20 Z:1`.
+- Include no more than two difficult letters in total from `J Q X Z`, and no
+  more than four copies of any individual letter.
+- When a letter reaches its cap, remove it from subsequent weighted draws. When
+  the difficult-letter group reaches its cap, remove all four difficult letters
+  from subsequent draws.
+- Shuffle the completed bag before assigning letters to row-major board
+  positions.
+
+The integer weights are product tuning constants rounded from conventional
+English text letter-frequency percentages. They favor familiar, playable
+boards rather than claiming to model a particular corpus. Production draws and
+the shuffle use cryptographically secure randomness with unbiased bounded
+sampling.
+
 ## Game rules
 
 1. All tiles begin with a neutral colour.
