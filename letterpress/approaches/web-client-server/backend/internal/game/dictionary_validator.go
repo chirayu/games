@@ -16,12 +16,19 @@ var embeddedEnglishWords string
 // DictionaryWordValidator performs immutable, concurrency-safe exact lookups.
 type DictionaryWordValidator struct {
 	words map[string]struct{}
+	list  []string
 }
 
 var defaultEnglishValidator = mustLoadEnglishDictionary()
 
 // EnglishDictionaryValidator returns the process-wide validated dictionary.
 func EnglishDictionaryValidator() WordValidator { return defaultEnglishValidator }
+
+// EnglishDictionaryWords returns an immutable-view copy in lexical order.
+// The returned strings and Valid use the same checksum-verified source.
+func EnglishDictionaryWords() []string {
+	return defaultEnglishValidator.Words()
+}
 
 func mustLoadEnglishDictionary() *DictionaryWordValidator {
 	validator, err := newDictionaryWordValidator(embeddedEnglishWords, englishDictionarySHA256)
@@ -54,7 +61,12 @@ func newDictionaryWordValidator(contents, expectedSHA256 string) (*DictionaryWor
 		words[word] = struct{}{}
 		previous = word
 	}
-	return &DictionaryWordValidator{words: words}, nil
+	return &DictionaryWordValidator{words: words, list: append([]string(nil), lines...)}, nil
+}
+
+// Words returns a copy of the canonical sorted lexicon.
+func (validator *DictionaryWordValidator) Words() []string {
+	return append([]string(nil), validator.list...)
 }
 
 // Valid implements WordValidator with ASCII case-insensitive matching.

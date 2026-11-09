@@ -30,6 +30,21 @@ runtime filesystem or network access is involved. The server still derives the
 candidate word from ordered board tiles before dictionary, repeated-word, and
 prefix validation.
 
+The bot `search` package has no HTTP or persistence dependencies. It builds an
+immutable index over that exact embedded lexicon, filters words by board-letter
+counts and move history, and emits ordered tile indexes. For duplicate letters,
+the deterministic assignment prefers neutral tiles, then capturable opponent
+tiles, then already-owned tiles, and finally protected opponent tiles. Candidate
+outcomes are simulated on copied ownership slices and are advisory only: the
+authoritative game engine revalidates every submitted move and recalculates
+protection.
+
+The representative full-dictionary 5×5 benchmark has a practical regression
+budget of 25 ms and 40 MiB per enumeration on the reference Apple M3 developer
+machine. The initial implementation measures about 14–15 ms and 29.7 MiB. The
+benchmark is retained in `internal/bot/search`; the budget is an engineering
+guardrail rather than a cross-hardware runtime guarantee.
+
 HTTP handlers translate requests and errors. An application service coordinates
 authentication, domain operations, and transactions. The SQLite store uses
 sqlc-generated queries.

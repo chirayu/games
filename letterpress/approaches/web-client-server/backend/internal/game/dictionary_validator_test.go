@@ -34,6 +34,21 @@ func TestDictionaryTreatsQAsALiteralTile(t *testing.T) {
 	}
 }
 
+func TestEnglishDictionaryWordsIsAnImmutableEnumerableView(t *testing.T) {
+	words := EnglishDictionaryWords()
+	if len(words) == 0 {
+		t.Fatal("EnglishDictionaryWords returned no words")
+	}
+	first := words[0]
+	if !EnglishDictionaryValidator().Valid(first) {
+		t.Fatalf("enumerated word %q is not valid", first)
+	}
+	words[0] = "MUTATED"
+	if got := EnglishDictionaryWords()[0]; got != first {
+		t.Fatalf("mutating returned words changed embedded lexicon: got %q, want %q", got, first)
+	}
+}
+
 func TestDictionaryParserRejectsMalformedArtifacts(t *testing.T) {
 	for _, contents := range []string{"", "DOG\nCAT\n", "CAT\nCAT\n", "CAFÉ\n", "CAT"} {
 		digest := sha256.Sum256([]byte(contents))
