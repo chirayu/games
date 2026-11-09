@@ -45,6 +45,23 @@ machine. The initial implementation measures about 14–15 ms and 29.7 MiB. The
 benchmark is retained in `internal/bot/search`; the budget is an engineering
 guardrail rather than a cross-hardware runtime guarantee.
 
+The first decision policy is immutable `balanced` version 1 with full embedded
+dictionary knowledge. It scores immediate neutral capture (12), opponent
+capture (20), newly protected friendly tiles (8), broken opponent protection
+(8), and resulting score advantage (3 per tile). It deterministically orders
+ties by ordered tile indexes, then reproducibly samples among at most the best
+three candidates whose scores are at least 85% of the maximum. Non-positive
+scores must tie the maximum to be sampled. The seed is derived only from the
+persisted game ID, profile version, turn number, policy name, and policy version.
+
+Policy selection returns ordered tile indexes, never applies a move, and logs
+only safe structured decision metadata: policy/version, profile version, turn,
+candidate and eligible counts, selected rank, and elapsed milliseconds. It does
+not log the seed inputs, credentials, board, words, or selected tiles. The
+representative end-to-end search-and-policy benchmark measures about 17 ms and
+29.7 MiB on the reference machine, within the same 25 ms / 40 MiB decision
+budget.
+
 HTTP handlers translate requests and errors. An application service coordinates
 authentication, domain operations, and transactions. The SQLite store uses
 sqlc-generated queries.
