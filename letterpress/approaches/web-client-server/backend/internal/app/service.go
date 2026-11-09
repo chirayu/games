@@ -139,7 +139,7 @@ type Service struct {
 
 // NewService returns the application service with production-safe randomness.
 func NewService(store Store) *Service {
-	return NewServiceWithDependencies(store, game.NewCryptoBoardGenerator(), game.EnglishDictionaryValidator())
+	return NewServiceWithDependencies(store, game.NewPlayableBoardGenerator(), game.EnglishDictionaryValidator())
 }
 
 // NewServiceWithBoardGenerator supplies a deterministic generator for tests.

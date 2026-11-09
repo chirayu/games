@@ -1,7 +1,6 @@
 package game
 
 import (
-	"bytes"
 	"errors"
 	"io"
 	"reflect"
@@ -37,26 +36,6 @@ func TestNewDefaultCreatesFiveByFiveBoard(t *testing.T) {
 	}
 	if game.CurrentPlayer() != PlayerOne || game.Status() != StatusActive {
 		t.Fatalf("new game player/status = %d/%q, want PlayerOne/active", game.CurrentPlayer(), game.Status())
-	}
-}
-
-func TestCryptoBoardGeneratorUsesUnbiasedLiteralLetters(t *testing.T) {
-	// 234 is rejected; the remaining bytes map literally to A, Z, and B.
-	generator := newCryptoBoardGenerator(bytes.NewReader([]byte{0, 25, 234, 1}))
-	letters, err := generator.Generate(3, 1)
-	if err != nil {
-		t.Fatalf("generate board: %v", err)
-	}
-	if string(letters) != "AZB" {
-		t.Fatalf("letters = %q, want AZB", letters)
-	}
-}
-
-func TestCryptoBoardGeneratorReportsEntropyFailure(t *testing.T) {
-	generator := newCryptoBoardGenerator(bytes.NewReader(nil))
-	_, err := generator.Generate(1, 1)
-	if !errors.Is(err, ErrGenerationFailed) || !errors.Is(err, io.EOF) {
-		t.Fatalf("error = %v, want generation failure wrapping EOF", err)
 	}
 }
 

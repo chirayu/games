@@ -18,7 +18,7 @@ type Game struct {
 // NewDefault creates a 5x5 game using secure random letters and the embedded
 // English dictionary.
 func NewDefault() (*Game, error) {
-	return New(DefaultWidth, DefaultHeight, NewCryptoBoardGenerator(), EnglishDictionaryValidator())
+	return New(DefaultWidth, DefaultHeight, NewPlayableBoardGenerator(), EnglishDictionaryValidator())
 }
 
 // New creates an active game with a configurable board and replaceable board

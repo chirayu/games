@@ -237,7 +237,7 @@ func TestSpecifiedChallengeExpiresAfterSevenDays(t *testing.T) {
 	t.Cleanup(func() { _ = repository.Close() })
 	now := time.Date(2026, time.November, 1, 10, 0, 0, 0, time.UTC)
 	clock := func() time.Time { return now }
-	service := app.NewServiceWithDependenciesAndClock(repository, game.NewCryptoBoardGenerator(), game.MVPWordValidator{}, clock)
+	service := app.NewServiceWithDependenciesAndClock(repository, game.NewPlayableBoardGenerator(), game.MVPWordValidator{}, clock)
 	handler := newTestHTTPHandler(service, Config{InsecureCookies: true, AllowedOrigin: testOrigin, Now: clock})
 	_, aliceCookie := loginLobbyPlayer(t, handler, "Alice")
 	bob, bobCookie := loginLobbyPlayer(t, handler, "Bob")
@@ -373,7 +373,7 @@ func TestRandomMatchmakingRecoversQueuedAllocationAfterRestart(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		service := app.NewServiceWithDependenciesAndClock(repository, game.NewCryptoBoardGenerator(), game.MVPWordValidator{}, clock)
+		service := app.NewServiceWithDependenciesAndClock(repository, game.NewPlayableBoardGenerator(), game.MVPWordValidator{}, clock)
 		return repository, newTestHTTPHandler(service, Config{InsecureCookies: true, AllowedOrigin: testOrigin, Now: clock})
 	}
 

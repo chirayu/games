@@ -592,11 +592,11 @@ func newIntegrationHandler(t *testing.T, secureCookies bool) (http.Handler, *sql
 }
 
 func testService(repository *sqlite.Repository) *app.Service {
-	return app.NewServiceWithDependencies(repository, game.NewCryptoBoardGenerator(), game.MVPWordValidator{})
+	return app.NewServiceWithDependencies(repository, game.NewPlayableBoardGenerator(), game.MVPWordValidator{})
 }
 
 func testServiceAt(repository *sqlite.Repository, now func() time.Time) *app.Service {
-	return app.NewServiceWithDependenciesAndClock(repository, game.NewCryptoBoardGenerator(), game.MVPWordValidator{}, now)
+	return app.NewServiceWithDependenciesAndClock(repository, game.NewPlayableBoardGenerator(), game.MVPWordValidator{}, now)
 }
 
 func newDictionaryIntegrationHandler(t *testing.T, databasePath string) (http.Handler, *sqlite.Repository) {
