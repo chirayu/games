@@ -20,6 +20,51 @@ async function register(page: Page, name: string) {
   await expect(page).toHaveURL(/\/lobby$/);
 }
 
+async function expectCompactBoardAt(
+  page: Page,
+  viewport: { width: number; height: number },
+) {
+  await page.setViewportSize(viewport);
+  const layout = await page.evaluate(() => {
+    const board = document.querySelector<HTMLElement>(".letter-board");
+    const preview = document.querySelector<HTMLElement>(".word-preview");
+    const controls = document.querySelector<HTMLElement>(".move-composer");
+    const tiles = [...document.querySelectorAll<HTMLElement>(".game-tile")];
+    if (!board || !preview || !controls || tiles.length !== 25)
+      throw new Error("The complete game interaction area was not rendered");
+    const boardBox = board.getBoundingClientRect();
+    const previewBox = preview.getBoundingClientRect();
+    const controlsBox = controls.getBoundingClientRect();
+    return {
+      documentWidth: document.documentElement.scrollWidth,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+      boardWidth: boardBox.width,
+      boardRight: boardBox.right,
+      previewBottom: previewBox.bottom,
+      boardTop: boardBox.top,
+      boardBottom: boardBox.bottom,
+      controlsTop: controlsBox.top,
+      controlsBottom: controlsBox.bottom,
+      minimumTileWidth: Math.min(
+        ...tiles.map((tile) => tile.getBoundingClientRect().width),
+      ),
+      minimumTileHeight: Math.min(
+        ...tiles.map((tile) => tile.getBoundingClientRect().height),
+      ),
+    };
+  });
+
+  expect(layout.documentWidth).toBeLessThanOrEqual(layout.viewportWidth);
+  expect(layout.boardWidth).toBeLessThanOrEqual(345);
+  expect(layout.boardRight).toBeLessThanOrEqual(layout.viewportWidth);
+  expect(layout.minimumTileWidth).toBeGreaterThanOrEqual(44);
+  expect(layout.minimumTileHeight).toBeGreaterThanOrEqual(44);
+  expect(layout.previewBottom).toBeLessThanOrEqual(layout.boardTop);
+  expect(layout.controlsTop - layout.boardBottom).toBeLessThanOrEqual(12);
+  expect(layout.controlsBottom).toBeLessThanOrEqual(layout.viewportHeight);
+}
+
 test("two isolated players resume, recover from stale state, and finish a game", async ({
   browser,
 }) => {
@@ -58,7 +103,53 @@ test("two isolated players resume, recover from stale state, and finish a game",
     playerTwo.getByText("Player 2", { exact: true }).first(),
   ).toBeVisible();
 
+  for (const viewport of [
+    { width: 320, height: 800 },
+    { width: 1366, height: 768 },
+    { width: 1920, height: 1080 },
+  ]) {
+    await expectCompactBoardAt(playerOne, viewport);
+  }
+
+  const playerOneTiles = playerOne.getByRole("gridcell");
+  const wordPreview = playerOne.locator(".word-preview__value");
+  await expect(wordPreview).toHaveText("Select tiles to make a word");
+  await playerOneTiles.nth(0).press("Enter");
+  await expect(wordPreview).toHaveText("C");
+  await expect(playerOneTiles.nth(0)).toHaveClass(/game-tile--selected/);
+  await expect
+    .poll(() =>
+      playerOneTiles.nth(0).evaluate((tile) => {
+        const style = getComputedStyle(tile);
+        return (
+          document.activeElement === tile &&
+          style.outlineStyle !== "none" &&
+          Number.parseFloat(style.outlineWidth) >= 3
+        );
+      }),
+    )
+    .toBe(true);
+  await playerOneTiles.nth(0).press("Enter");
+  await expect(wordPreview).toHaveText("Select tiles to make a word");
+  await playerOneTiles.nth(2).click();
+  await expect(wordPreview).toHaveText("T");
+  await playerOne.getByRole("button", { name: "Clear" }).click();
+  await expect(wordPreview).toHaveText("Select tiles to make a word");
+
+  for (const index of Array.from({ length: 25 }, (_, index) => index)) {
+    await playerOneTiles.nth(index).click();
+  }
+  await playerOne.getByRole("button", { name: "Submit word" }).click();
+  await expect(playerOne.getByRole("alert")).toContainText(
+    "isn’t in the English dictionary",
+  );
+  await expect(wordPreview).toHaveText("CATDOGSUNMAPEXTRAORDINARY");
+  await playerOne.getByRole("button", { name: "Clear" }).click();
+
   await playTiles(playerOne, [0, 1, 2], 1);
+  await expect(playerOne.getByRole("gridcell").first()).toHaveClass(
+    /game-tile--disabled/,
+  );
   await playerTwo.reload();
   await expectVersion(playerTwo, 1);
   await playTiles(playerTwo, [3, 4, 5], 2);
@@ -127,6 +218,12 @@ test("two isolated players resume, recover from stale state, and finish a game",
   await expect(resumedPlayerTwo.locator(".move-history")).toContainText(
     "Move history (5)",
   );
+  await expect(
+    playerOne.locator(".game-tile--player-one.game-tile--protected").first(),
+  ).toBeVisible();
+  await expect(
+    playerOne.locator(".game-tile--player-two.game-tile--protected").first(),
+  ).toBeVisible();
 
   await staleContext.close();
   await playerOneContext.close();

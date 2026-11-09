@@ -48,7 +48,7 @@ function gameState(): GameState {
       index,
       letter: String.fromCharCode(65 + (index % 26)),
       owner: index === 0 ? 1 : index === 24 ? 2 : 0,
-      protected: index === 0,
+      protected: index === 0 || index === 24,
     })),
     scores: { playerOne: 1, playerTwo: 1 },
     activePlayer: 1,
@@ -90,6 +90,30 @@ describe("GameView", () => {
       "A, owned by Player 1, protected, row 1, column 1",
     );
     expect(firstTile.find(".protection-mark").exists()).toBe(true);
+    expect(firstTile.classes()).toEqual(
+      expect.arrayContaining(["game-tile--player-one", "game-tile--protected"]),
+    );
+    const lastTile = wrapper.findAll('[role="gridcell"]')[24];
+    expect(lastTile.classes()).toEqual(
+      expect.arrayContaining(["game-tile--player-two", "game-tile--protected"]),
+    );
+    expect(lastTile.attributes("aria-label")).toContain(
+      "owned by Player 2, protected",
+    );
+    expect(wrapper.get(".letter-board").classes()).toContain(
+      "letter-board--compact",
+    );
+    expect(wrapper.get(".word-preview").attributes("aria-labelledby")).toBe(
+      "word-preview-title",
+    );
+    expect(wrapper.get(".word-preview__value").attributes("aria-live")).toBe(
+      "polite",
+    );
+    expect(wrapper.get(".word-preview__value").text()).toBe(
+      "Select tiles to make a word",
+    );
+    expect(wrapper.get(".legend").text()).toContain("Player 1 protected");
+    expect(wrapper.get(".legend").text()).toContain("Player 2 protected");
     expect(wrapper.get(".score-card--one").text()).toContain("You");
     expect(wrapper.get(".board-footer").text()).toContain("State v3");
   });
@@ -117,6 +141,9 @@ describe("GameView", () => {
     ).toBe(true);
     expect(wrapper.get('[role="gridcell"]').attributes("aria-disabled")).toBe(
       "true",
+    );
+    expect(wrapper.get('[role="gridcell"]').classes()).toContain(
+      "game-tile--disabled",
     );
   });
 
@@ -150,15 +177,15 @@ describe("GameView", () => {
 
     await tiles[2].trigger("click");
     await tiles[0].trigger("click");
-    expect(wrapper.get(".move-composer__word strong").text()).toBe("CA");
+    expect(wrapper.get(".word-preview__value").text()).toBe("CA");
     expect(tiles[2].get(".selection-order").text()).toBe("1");
     expect(tiles[0].get(".selection-order").text()).toBe("2");
 
     await tiles[2].trigger("click");
-    expect(wrapper.get(".move-composer__word strong").text()).toBe("A");
+    expect(wrapper.get(".word-preview__value").text()).toBe("A");
     await wrapper.get(".move-clear").trigger("click");
-    expect(wrapper.get(".move-composer__word strong").text()).toBe(
-      "Select tiles",
+    expect(wrapper.get(".word-preview__value").text()).toBe(
+      "Select tiles to make a word",
     );
   });
 
@@ -180,8 +207,8 @@ describe("GameView", () => {
 
     expect(api.submitMove).toHaveBeenCalledWith("game-123", [2, 0], 3);
     expect(wrapper.get(".turn-banner").text()).toBe("Player 2’s turn");
-    expect(wrapper.get(".move-composer__word strong").text()).toBe(
-      "Select tiles",
+    expect(wrapper.get(".word-preview__value").text()).toBe(
+      "Select tiles to make a word",
     );
     expect(
       wrapper
@@ -219,7 +246,7 @@ describe("GameView", () => {
     expect(wrapper.get('[role="alert"]').text()).toContain(
       "isn’t in the English dictionary",
     );
-    expect(wrapper.get(".move-composer__word strong").text()).toBe("A");
+    expect(wrapper.get(".word-preview__value").text()).toBe("A");
     expect(localStorage.getItem("letterpress:draft:game-123")).toContain(
       '"tileIndexes":[0]',
     );
@@ -301,7 +328,7 @@ describe("GameView", () => {
     await first.wrapper.get(".move-submit").trigger("click");
     await flushPromises();
 
-    expect(first.wrapper.get(".move-composer__word strong").text()).toBe("A");
+    expect(first.wrapper.get(".word-preview__value").text()).toBe("A");
     expect(localStorage.getItem("letterpress:draft:game-123")).toContain(
       '"tileIndexes":[0]',
     );
@@ -309,7 +336,7 @@ describe("GameView", () => {
 
     const second = await mountGame();
     await flushPromises();
-    expect(second.wrapper.get(".move-composer__word strong").text()).toBe("A");
+    expect(second.wrapper.get(".word-preview__value").text()).toBe("A");
     second.wrapper.unmount();
   });
 
@@ -322,8 +349,8 @@ describe("GameView", () => {
     const { wrapper } = await mountGame();
     await flushPromises();
 
-    expect(wrapper.get(".move-composer__word strong").text()).toBe(
-      "Select tiles",
+    expect(wrapper.get(".word-preview__value").text()).toBe(
+      "Select tiles to make a word",
     );
     expect(wrapper.get(".sync-status").text()).toContain(
       "older saved selection",

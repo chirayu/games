@@ -378,77 +378,99 @@ async function submitSelection() {
         </button>
       </div>
 
-      <div
-        class="letter-board"
-        role="grid"
-        aria-label="Letterpress board"
-        :aria-rowcount="game.height"
-        :aria-colcount="game.width"
-        :style="{
-          gridTemplateColumns: `repeat(${game.width}, minmax(0, 1fr))`,
-        }"
-      >
-        <button
-          v-for="tile in game.tiles"
-          :key="tile.index"
-          class="game-tile"
-          role="gridcell"
-          type="button"
-          :class="{
-            'game-tile--selected': selectedIndexes.includes(tile.index),
-          }"
-          :data-owner="tile.owner"
-          :data-protected="tile.protected"
-          :aria-pressed="selectedIndexes.includes(tile.index)"
-          :aria-disabled="!canPlay || submitting"
-          :aria-rowindex="Math.floor(tile.index / game.width) + 1"
-          :aria-colindex="(tile.index % game.width) + 1"
-          :aria-label="tileLabel(tile)"
-          @click="toggleTile(tile.index)"
-        >
-          <span class="game-tile__letter">{{ tile.letter }}</span>
-          <span
-            v-if="selectedIndexes.includes(tile.index)"
-            class="selection-order"
-            aria-hidden="true"
+      <section class="game-play-area" aria-label="Word selection">
+        <section class="word-preview" aria-labelledby="word-preview-title">
+          <span id="word-preview-title" class="word-preview__label"
+            >Selected word</span
           >
-            {{ selectedIndexes.indexOf(tile.index) + 1 }}
-          </span>
-          <span v-if="tile.protected" class="protection-mark" aria-hidden="true"
-            >◆</span
+          <strong
+            class="word-preview__value"
+            aria-live="polite"
+            aria-atomic="true"
           >
-        </button>
-      </div>
-
-      <section class="move-composer" aria-labelledby="word-title">
-        <div class="move-composer__word">
-          <span id="word-title">Your word</span>
-          <strong aria-live="polite">
-            {{ formedWord || "Select tiles" }}
+            <span v-if="formedWord">{{ formedWord }}</span>
+            <span v-else class="word-preview__empty"
+              >Select tiles to make a word</span
+            >
           </strong>
-        </div>
-        <div class="move-actions">
+        </section>
+
+        <div
+          class="letter-board letter-board--compact"
+          role="grid"
+          aria-label="Letterpress board"
+          :aria-rowcount="game.height"
+          :aria-colcount="game.width"
+          :style="{
+            gridTemplateColumns: `repeat(${game.width}, minmax(0, 1fr))`,
+          }"
+        >
           <button
-            class="secondary-action move-clear"
+            v-for="tile in game.tiles"
+            :key="tile.index"
+            class="game-tile"
+            role="gridcell"
             type="button"
-            :disabled="selectedIndexes.length === 0 || submitting"
-            @click="clearSelection"
+            :class="{
+              'game-tile--neutral': tile.owner === 0,
+              'game-tile--player-one': tile.owner === 1,
+              'game-tile--player-two': tile.owner === 2,
+              'game-tile--protected': tile.protected,
+              'game-tile--selected': selectedIndexes.includes(tile.index),
+              'game-tile--disabled': !canPlay || submitting,
+            }"
+            :data-owner="tile.owner"
+            :data-protected="tile.protected"
+            :aria-pressed="selectedIndexes.includes(tile.index)"
+            :aria-disabled="!canPlay || submitting"
+            :aria-rowindex="Math.floor(tile.index / game.width) + 1"
+            :aria-colindex="(tile.index % game.width) + 1"
+            :aria-label="tileLabel(tile)"
+            @click="toggleTile(tile.index)"
           >
-            Clear
-          </button>
-          <button
-            class="primary-action move-submit"
-            type="button"
-            :disabled="!canPlay || selectedIndexes.length === 0 || submitting"
-            @click="submitSelection"
-          >
-            {{ submitting ? "Submitting…" : "Submit word" }}
+            <span class="game-tile__letter">{{ tile.letter }}</span>
+            <span
+              v-if="selectedIndexes.includes(tile.index)"
+              class="selection-order"
+              aria-hidden="true"
+            >
+              {{ selectedIndexes.indexOf(tile.index) + 1 }}
+            </span>
+            <span
+              v-if="tile.protected"
+              class="protection-mark"
+              aria-hidden="true"
+              >◆</span
+            >
           </button>
         </div>
-        <p v-if="!canPlay" class="move-hint">
-          {{ playHint }}
-        </p>
-        <p v-if="moveError" class="move-error" role="alert">{{ moveError }}</p>
+
+        <section class="move-composer" aria-label="Word actions">
+          <div class="move-actions">
+            <button
+              class="secondary-action move-clear"
+              type="button"
+              :disabled="selectedIndexes.length === 0 || submitting"
+              @click="clearSelection"
+            >
+              Clear
+            </button>
+            <button
+              class="primary-action move-submit"
+              type="button"
+              :disabled="!canPlay || selectedIndexes.length === 0 || submitting"
+              @click="submitSelection"
+            >
+              {{ submitting ? "Submitting…" : "Submit word" }}
+            </button>
+          </div>
+          <p v-if="!canPlay" class="move-hint">
+            {{ playHint }}
+          </p>
+          <p v-if="moveError" class="move-error" role="alert">
+            {{ moveError }}
+          </p>
+        </section>
       </section>
 
       <details v-if="game.moves.length" class="move-history">
@@ -465,8 +487,17 @@ async function submitSelection() {
         <div class="legend" aria-label="Board legend">
           <span><i data-owner="0"></i>Neutral</span>
           <span><i data-owner="1"></i>Player 1</span>
+          <span
+            ><i data-owner="1" data-protected="true"
+              ><b aria-hidden="true">◆</b></i
+            >Player 1 protected</span
+          >
           <span><i data-owner="2"></i>Player 2</span>
-          <span><b aria-hidden="true">◆</b>Protected</span>
+          <span
+            ><i data-owner="2" data-protected="true"
+              ><b aria-hidden="true">◆</b></i
+            >Player 2 protected</span
+          >
         </div>
         <p>State v{{ game.version }} · {{ game.status }}</p>
       </footer>
