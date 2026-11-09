@@ -436,12 +436,6 @@ async function submitSelection() {
             >
               {{ selectedIndexes.indexOf(tile.index) + 1 }}
             </span>
-            <span
-              v-if="tile.protected"
-              class="protection-mark"
-              aria-hidden="true"
-              >◆</span
-            >
           </button>
         </div>
 
@@ -488,15 +482,13 @@ async function submitSelection() {
           <span><i data-owner="0"></i>Neutral</span>
           <span><i data-owner="1"></i>Player 1</span>
           <span
-            ><i data-owner="1" data-protected="true"
-              ><b aria-hidden="true">◆</b></i
-            >Player 1 protected</span
+            ><i data-owner="1" data-protected="true"></i>Player 1
+            protected</span
           >
           <span><i data-owner="2"></i>Player 2</span>
           <span
-            ><i data-owner="2" data-protected="true"
-              ><b aria-hidden="true">◆</b></i
-            >Player 2 protected</span
+            ><i data-owner="2" data-protected="true"></i>Player 2
+            protected</span
           >
         </div>
         <p>State v{{ game.version }} · {{ game.status }}</p>

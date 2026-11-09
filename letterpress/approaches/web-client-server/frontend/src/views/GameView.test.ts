@@ -89,7 +89,7 @@ describe("GameView", () => {
     expect(firstTile.attributes("aria-label")).toContain(
       "A, owned by Player 1, protected, row 1, column 1",
     );
-    expect(firstTile.find(".protection-mark").exists()).toBe(true);
+    expect(firstTile.find(".protection-mark").exists()).toBe(false);
     expect(firstTile.classes()).toEqual(
       expect.arrayContaining(["game-tile--player-one", "game-tile--protected"]),
     );

@@ -17,12 +17,12 @@
   --game-ink: #172033;
   --game-muted: #526176;
   --game-border: #9aabc1;
-  --player-one: #f8c7d9;
-  --player-one-border: #a82f61;
-  --player-one-protected: #e27da4;
-  --player-two: #c4e8ff;
-  --player-two-border: #24729f;
-  --player-two-protected: #73bde9;
+  --player-one: #f6b8ce;
+  --player-one-border: #b33a68;
+  --player-one-protected: #df7199;
+  --player-two: #b9e1fb;
+  --player-two-border: #2d79a8;
+  --player-two-protected: #67b4e5;
   --selection-ring: #4c1d95;
   --selection-badge: #32106f;
   --focus-ring: #111827;
@@ -718,8 +718,9 @@ h1 {
 }
 
 .game-tile--protected {
-  outline: 2px solid var(--game-ink);
-  outline-offset: -0.34rem;
+  box-shadow:
+    inset 0 0 0 5px rgb(255 255 255 / 30%),
+    0 0.14rem 0 rgb(23 32 51 / 18%);
 }
 
 .game-tile--selected {
@@ -727,6 +728,13 @@ h1 {
     0 0 0 3px var(--game-surface),
     0 0 0 6px var(--selection-ring);
   z-index: 1;
+}
+
+.game-tile--protected.game-tile--selected {
+  box-shadow:
+    inset 0 0 0 5px rgb(255 255 255 / 30%),
+    0 0 0 3px var(--game-surface),
+    0 0 0 6px var(--selection-ring);
 }
 
 .game-tile:focus-visible {
@@ -740,18 +748,6 @@ h1 {
   font-size: clamp(1.25rem, 6vw, 1.9rem);
   font-weight: 800;
   line-height: 1;
-}
-
-.protection-mark {
-  background: var(--game-ink);
-  border-radius: 999px;
-  bottom: 0.28rem;
-  color: #fff;
-  font-size: clamp(0.4rem, 1.4vw, 0.58rem);
-  line-height: 1;
-  padding: 0.2rem;
-  position: absolute;
-  right: 0.28rem;
 }
 
 .selection-order {
@@ -908,15 +904,12 @@ h1 {
 
 .legend i[data-owner="1"][data-protected="true"] {
   background: var(--player-one-protected);
+  box-shadow: inset 0 0 0 2px rgb(255 255 255 / 38%);
 }
 
 .legend i[data-owner="2"][data-protected="true"] {
   background: var(--player-two-protected);
-}
-
-.legend i b {
-  color: var(--game-ink);
-  font-size: 0.5rem;
+  box-shadow: inset 0 0 0 2px rgb(255 255 255 / 38%);
 }
 
 .state-card {
