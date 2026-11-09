@@ -11,6 +11,7 @@ Development is tracked in the [Letterpress Linear project](https://linear.app/ch
 - Go 1.24 or newer
 - Node.js 24 or newer
 - pnpm 11
+- Make, curl, and OpenSSL for the combined local runner
 
 No standalone SQLite installation is required. The backend uses the pure-Go
 SQLite driver, applies embedded Goose migrations, and keeps sqlc output in the
@@ -70,6 +71,26 @@ docs/
 ```
 
 ## Local development
+
+From the repository root, start the backend, frontend, and bot worker together:
+
+```sh
+make start
+```
+
+Open `http://127.0.0.1:5173`. Inspect managed process state and logs with
+`make status` and `make logs`, then stop all three processes with:
+
+```sh
+make stop
+```
+
+The Makefile records exact PIDs under the ignored
+`approaches/web-client-server/.run/` directory, so `make stop` does not stop
+unrelated processes. Ports can be overridden when the defaults are occupied;
+run `make help` for an example.
+
+The services can also be started individually as follows.
 
 Start the backend in one terminal:
 

@@ -1,3 +1,4 @@
 .pnpm-store/
 approaches/web-client-server/backend/letterpress.db*
 approaches/web-client-server/build/
+approaches/web-client-server/.run/
