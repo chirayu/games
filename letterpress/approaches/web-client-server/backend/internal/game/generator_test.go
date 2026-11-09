@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
+	"math/rand"
 	"reflect"
 	"testing"
 )
@@ -62,6 +63,61 @@ func TestPlayableBoardGeneratorIsReproducibleWithFixedEntropy(t *testing.T) {
 	}
 	if !reflect.DeepEqual(firstBoard, secondBoard) {
 		t.Fatalf("fixed entropy boards differ: %q and %q", firstBoard, secondBoard)
+	}
+}
+
+func TestPlayableBoardGeneratorLargeSampleDistributionIsDeterministic(t *testing.T) {
+	const sampleBoards = 10_000
+	sample := func(seed int64) [26]int {
+		t.Helper()
+		generator, err := NewPlayableBoardGeneratorWithPolicy(DefaultBoardGenerationPolicy(), rand.New(rand.NewSource(seed)))
+		if err != nil {
+			t.Fatalf("new sampled generator: %v", err)
+		}
+		totals := [26]int{}
+		for boardIndex := 0; boardIndex < sampleBoards; boardIndex++ {
+			letters, generateErr := generator.Generate(5, 5)
+			if generateErr != nil {
+				t.Fatalf("generate sampled board %d: %v", boardIndex, generateErr)
+			}
+			counts := [26]int{}
+			vowels := 0
+			difficult := 0
+			for _, letter := range letters {
+				counts[letter-'A']++
+				totals[letter-'A']++
+				switch letter {
+				case 'A', 'E', 'I', 'O', 'U':
+					vowels++
+				case 'J', 'Q', 'X', 'Z':
+					difficult++
+				}
+			}
+			if vowels < 5 || vowels > 7 || difficult > 2 {
+				t.Fatalf("sampled board %d has %d vowels and %d difficult letters", boardIndex, vowels, difficult)
+			}
+			for letter, count := range counts {
+				if count > 4 {
+					t.Fatalf("sampled board %d has %d copies of %c", boardIndex, count, 'A'+letter)
+				}
+			}
+		}
+		return totals
+	}
+
+	first := sample(14)
+	second := sample(14)
+	if first != second {
+		t.Fatalf("same seed produced different totals: %v and %v", first, second)
+	}
+	for index, count := range first {
+		if count == 0 {
+			t.Fatalf("configured letter %c was unreachable in %d boards", 'A'+index, sampleBoards)
+		}
+	}
+	if first['E'-'A'] <= first['U'-'A'] || first['T'-'A'] <= first['J'-'A'] || first['N'-'A'] <= first['K'-'A'] {
+		t.Fatalf("sample does not reflect common-over-rare weighting: E/U=%d/%d T/J=%d/%d N/K=%d/%d",
+			first['E'-'A'], first['U'-'A'], first['T'-'A'], first['J'-'A'], first['N'-'A'], first['K'-'A'])
 	}
 }
 

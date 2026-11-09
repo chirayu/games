@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -60,6 +61,39 @@ func TestAllocationAPIIsIdempotentPrivateAndCancellable(t *testing.T) {
 		t.Fatalf("reserved allocation states = %q/%q", random.State, bot.State)
 	}
 	createAllocationRequest(t, handler, nil, "anonymous", "random", "", http.StatusUnauthorized)
+}
+
+func TestEveryAllocationModeCreatesAPlayableBoardWithoutRewritingExistingGames(t *testing.T) {
+	handler, _, _ := newIntegrationHandler(t, true)
+
+	_, aliceCookie := loginLobbyPlayer(t, handler, "Playable Alice")
+	bob, bobCookie := loginLobbyPlayer(t, handler, "Playable Bob")
+	specified := createAllocationRequest(t, handler, aliceCookie, "playable-specified", "specified", bob.ID, http.StatusCreated)
+	specified = actionAllocationRequest(t, handler, bobCookie, specified.ID, "accept", http.StatusOK)
+	specifiedView := loadGame(t, handler, specified.GameID, aliceCookie)
+	assertPlayableGameView(t, "specified", specifiedView)
+	originalSpecifiedLetters := gameViewLetters(specifiedView)
+
+	_, carolCookie := loginLobbyPlayer(t, handler, "Playable Carol")
+	_, daveCookie := loginLobbyPlayer(t, handler, "Playable Dave")
+	carolQueue := createAllocationRequest(t, handler, carolCookie, "playable-random-carol", "random", "", http.StatusCreated)
+	daveMatch := createAllocationRequest(t, handler, daveCookie, "playable-random-dave", "random", "", http.StatusCreated)
+	if carolQueue.State != "queued" || daveMatch.State != "allocated" {
+		t.Fatalf("random allocation states = %q/%q, want queued/allocated", carolQueue.State, daveMatch.State)
+	}
+	assertPlayableGameView(t, "random", loadGame(t, handler, daveMatch.GameID, daveCookie))
+
+	_, eveCookie := loginLobbyPlayer(t, handler, "Playable Eve")
+	bot := createAllocationRequest(t, handler, eveCookie, "playable-bot", "bot", "", http.StatusCreated)
+	if bot.State != "allocated" {
+		t.Fatalf("bot allocation state = %q, want allocated", bot.State)
+	}
+	assertPlayableGameView(t, "bot", loadGame(t, handler, bot.GameID, eveCookie))
+
+	reloadedSpecified := loadGame(t, handler, specified.GameID, aliceCookie)
+	if got := gameViewLetters(reloadedSpecified); !reflect.DeepEqual(got, originalSpecifiedLetters) {
+		t.Fatalf("persisted specified board changed from %v to %v", originalSpecifiedLetters, got)
+	}
 }
 
 func TestBotProfileSelectionAllocatesImmediatelyAndIsIdempotent(t *testing.T) {
@@ -580,4 +614,46 @@ func decodeAllocation(t *testing.T, response *httptest.ResponseRecorder) app.Gam
 	}
 	decodeResponse(t, response, &envelope)
 	return envelope.Data
+}
+
+func assertPlayableGameView(t *testing.T, mode string, view app.GameView) {
+	t.Helper()
+	if view.Width != 5 || view.Height != 5 || len(view.Tiles) != 25 {
+		t.Fatalf("%s board dimensions = %dx%d with %d tiles", mode, view.Width, view.Height, len(view.Tiles))
+	}
+	counts := [26]int{}
+	vowels := 0
+	difficult := 0
+	for _, tile := range view.Tiles {
+		if len(tile.Letter) != 1 || tile.Letter[0] < 'A' || tile.Letter[0] > 'Z' {
+			t.Fatalf("%s board letter = %q, want one A-Z letter", mode, tile.Letter)
+		}
+		letter := tile.Letter[0]
+		counts[letter-'A']++
+		switch letter {
+		case 'A', 'E', 'I', 'O', 'U':
+			vowels++
+		case 'J', 'Q', 'X', 'Z':
+			difficult++
+		}
+	}
+	if vowels < 5 || vowels > 7 {
+		t.Fatalf("%s board vowels = %d, want 5-7", mode, vowels)
+	}
+	if difficult > 2 {
+		t.Fatalf("%s board difficult letters = %d, want at most 2", mode, difficult)
+	}
+	for index, count := range counts {
+		if count > 4 {
+			t.Fatalf("%s board letter %c count = %d, want at most 4", mode, 'A'+index, count)
+		}
+	}
+}
+
+func gameViewLetters(view app.GameView) []string {
+	letters := make([]string, len(view.Tiles))
+	for index, tile := range view.Tiles {
+		letters[index] = tile.Letter
+	}
+	return letters
 }
