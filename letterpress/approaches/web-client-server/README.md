@@ -158,6 +158,9 @@ atomically assigned one shared game.
 The lobby's unified Start game flow is the only new-game journey and restores
 pending allocation state after reload. It contains no share-link or invitation
 compatibility path.
+Managed bots now have stable registered-player identities, immutable versioned
+profiles, hash-only runtime credentials, and historical profile snapshots on
+ordinary game seats. Move generation and bot allocation remain later tickets.
 
 ## Documentation
 

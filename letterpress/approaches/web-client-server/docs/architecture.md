@@ -64,7 +64,23 @@ versioned state share one transaction.
 A registered player has a stable random ID, a preserved display name, and a
 case-insensitive normalized name. Names contain 1–24 ASCII letters, numbers,
 spaces, hyphens, or underscores; surrounding spaces are removed and repeated
-spaces collapse to one. The normalized name is unique.
+spaces collapse to one. The normalized name is unique. Each player is typed as
+`human` or `bot`; public name entry always creates and authenticates humans and
+refuses managed bot identities.
+
+Managed bots use the same registered-player row and game-seat foreign keys as
+humans. Their configuration is stored as immutable, monotonically versioned bot
+profiles containing safe style, English-knowledge, and skill labels plus an
+enabled flag. `bot-balanced-v1` is the baseline managed identity with a
+`balanced`/`full_dictionary`/`baseline` version-1 profile. Bot creation and new
+profile versions are repository-level trusted administration operations with no
+public HTTP route.
+
+The future bot runtime authenticates with a high-entropy credential supplied by
+trusted configuration. Only its SHA-256 hash is stored in
+`bot_runtime_credentials`; raw credentials are never database fields, API
+responses, or logs. This credential namespace is separate from public browser
+sessions, so entering a bot's display name cannot impersonate it.
 
 `POST /api/v1/player-sessions` is intentionally both registration and login. A
 new normalized name creates the player, while an existing normalized name logs
@@ -95,6 +111,14 @@ Each game has exactly two `game_seats`. A seat links its numbered game role to
 a durable registered-player ID; it contains no credential. Game allocation is
 the only creator of games and assigns two distinct registered players when it
 calls the application service. There is no public direct game-creation endpoint.
+
+When a bot is seated, `game_seat_bot_profiles` snapshots the selected profile
+version and its safe labels under a foreign key to both the ordinary game seat
+and immutable profile version. Later profile versions therefore affect only new
+allocations. Lobby summaries derive bot type from the registered player and
+return only the snapshotted version/style/knowledge/skill labels—never runtime
+credentials, administrative state, or random seeds. Human seats require no
+parallel membership model or snapshot row.
 
 The migration from invitation capabilities is deliberately destructive. It
 purges all invitation-era games and move history, drops the legacy `players`

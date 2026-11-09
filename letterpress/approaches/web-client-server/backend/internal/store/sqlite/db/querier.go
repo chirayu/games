@@ -13,9 +13,12 @@ type Querier interface {
 	AllocateRandomGameAllocation(ctx context.Context, arg AllocateRandomGameAllocationParams) (int64, error)
 	CancelGameAllocation(ctx context.Context, arg CancelGameAllocationParams) (int64, error)
 	CompleteGameAllocation(ctx context.Context, arg CompleteGameAllocationParams) (int64, error)
+	CreateBotProfileVersion(ctx context.Context, arg CreateBotProfileVersionParams) error
+	CreateBotRuntimeCredential(ctx context.Context, arg CreateBotRuntimeCredentialParams) error
 	CreateGame(ctx context.Context, arg CreateGameParams) error
 	CreateGameAllocation(ctx context.Context, arg CreateGameAllocationParams) (int64, error)
 	CreateGameSeat(ctx context.Context, arg CreateGameSeatParams) error
+	CreateGameSeatBotProfile(ctx context.Context, arg CreateGameSeatBotProfileParams) error
 	CreateMove(ctx context.Context, arg CreateMoveParams) error
 	CreatePlayerSession(ctx context.Context, arg CreatePlayerSessionParams) error
 	CreateRegisteredPlayer(ctx context.Context, arg CreateRegisteredPlayerParams) (int64, error)
@@ -23,22 +26,27 @@ type Querier interface {
 	DeletePlayerSession(ctx context.Context, tokenHash []byte) (int64, error)
 	ExpireDueGameAllocations(ctx context.Context, now time.Time) (int64, error)
 	ExpireGameAllocation(ctx context.Context, arg ExpireGameAllocationParams) (int64, error)
+	GetBotByRuntimeCredentialHash(ctx context.Context, tokenHash []byte) (GetBotByRuntimeCredentialHashRow, error)
+	GetBotProfile(ctx context.Context, arg GetBotProfileParams) (BotProfile, error)
 	GetEquivalentPendingSpecifiedAllocation(ctx context.Context, arg GetEquivalentPendingSpecifiedAllocationParams) (GameAllocation, error)
 	GetEquivalentQueuedRandomAllocation(ctx context.Context, arg GetEquivalentQueuedRandomAllocationParams) (GameAllocation, error)
 	GetGame(ctx context.Context, id string) (Game, error)
 	GetGameAllocation(ctx context.Context, id string) (GameAllocation, error)
 	GetGameAllocationByRequesterKey(ctx context.Context, arg GetGameAllocationByRequesterKeyParams) (GameAllocation, error)
+	GetGameSeatBotProfile(ctx context.Context, arg GetGameSeatBotProfileParams) (GameSeatBotProfile, error)
 	GetGameSeatByPlayer(ctx context.Context, arg GetGameSeatByPlayerParams) (GameSeat, error)
+	GetLatestEnabledBotProfile(ctx context.Context, id string) (GetLatestEnabledBotProfileRow, error)
 	GetQueuedRandomAllocation(ctx context.Context, arg GetQueuedRandomAllocationParams) (GameAllocation, error)
 	GetRandomMatchCandidate(ctx context.Context, arg GetRandomMatchCandidateParams) (GameAllocation, error)
-	GetRegisteredPlayerByID(ctx context.Context, id string) (RegisteredPlayer, error)
-	GetRegisteredPlayerByNormalizedName(ctx context.Context, normalizedName string) (RegisteredPlayer, error)
-	GetRegisteredPlayerBySessionHash(ctx context.Context, arg GetRegisteredPlayerBySessionHashParams) (RegisteredPlayer, error)
+	GetRegisteredPlayerByID(ctx context.Context, id string) (GetRegisteredPlayerByIDRow, error)
+	GetRegisteredPlayerByNormalizedName(ctx context.Context, normalizedName string) (GetRegisteredPlayerByNormalizedNameRow, error)
+	GetRegisteredPlayerBySessionHash(ctx context.Context, arg GetRegisteredPlayerBySessionHashParams) (GetRegisteredPlayerBySessionHashRow, error)
 	ListActiveGamesForPlayer(ctx context.Context, arg ListActiveGamesForPlayerParams) ([]ListActiveGamesForPlayerRow, error)
 	ListGameSeats(ctx context.Context, gameID string) ([]GameSeat, error)
+	ListLatestEnabledBotProfiles(ctx context.Context) ([]ListLatestEnabledBotProfilesRow, error)
 	ListMoves(ctx context.Context, gameID string) ([]Move, error)
 	ListPendingSpecifiedChallenges(ctx context.Context, arg ListPendingSpecifiedChallengesParams) ([]ListPendingSpecifiedChallengesRow, error)
-	SearchRegisteredPlayers(ctx context.Context, arg SearchRegisteredPlayersParams) ([]RegisteredPlayer, error)
+	SearchRegisteredPlayers(ctx context.Context, arg SearchRegisteredPlayersParams) ([]SearchRegisteredPlayersRow, error)
 	UpdateGameState(ctx context.Context, arg UpdateGameStateParams) (int64, error)
 }
 

@@ -7,6 +7,12 @@ export interface Player {
 
 export interface PublicPlayer extends Player {
   type: "human" | "bot";
+  botProfile?: {
+    configurationVersion: number;
+    style: string;
+    englishKnowledgeLevel: string;
+    skillLevel: string;
+  };
 }
 
 export interface PlayerPage {

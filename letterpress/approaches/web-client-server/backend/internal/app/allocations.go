@@ -75,10 +75,14 @@ func (service *Service) CreateAllocation(
 		if opponentID == "" || opponentID == requester.ID {
 			return GameAllocation{}, false, ErrInvalidAllocation
 		}
-		if _, err := service.store.GetRegisteredPlayerByID(ctx, opponentID); errors.Is(err, sql.ErrNoRows) {
+		opponent, err := service.store.GetRegisteredPlayerByID(ctx, opponentID)
+		if errors.Is(err, sql.ErrNoRows) {
 			return GameAllocation{}, false, ErrInvalidAllocation
 		} else if err != nil {
 			return GameAllocation{}, false, fmt.Errorf("resolve allocation opponent: %w", err)
+		}
+		if opponent.PlayerType != "human" {
+			return GameAllocation{}, false, ErrInvalidAllocation
 		}
 		state = "pending_acceptance"
 		allowedOpponentType = "human"

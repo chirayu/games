@@ -31,6 +31,8 @@ var (
 	ErrAllocationTransition = errors.New("invalid allocation transition")
 	// ErrAllocationParticipant indicates that completion participants do not match the allocation.
 	ErrAllocationParticipant = errors.New("invalid allocation participant")
+	// ErrManagedBotSession prevents public name entry from creating a bot session.
+	ErrManagedBotSession = errors.New("managed bots cannot use player sessions")
 )
 
 // Game is the current persisted state of a game.
@@ -47,23 +49,34 @@ type Game struct {
 
 // GameSeat assigns one registered player to one numbered seat in a game.
 type GameSeat struct {
-	GameID    string
-	Seat      int64
-	PlayerID  string
-	CreatedAt time.Time
+	GameID     string
+	Seat       int64
+	PlayerID   string
+	CreatedAt  time.Time
+	BotProfile *BotProfileSnapshot
+}
+
+// BotProfileSnapshot is immutable game-time bot configuration attached to a seat.
+type BotProfileSnapshot struct {
+	ConfigurationVersion  int64
+	Style                 string
+	EnglishKnowledgeLevel string
+	SkillLevel            string
 }
 
 // ActiveGameSummary is the persisted data needed to build one lobby row.
 type ActiveGameSummary struct {
-	ID            string
-	TileOwners    []byte
-	CurrentPlayer int64
-	Status        string
-	Version       int64
-	UpdatedAt     time.Time
-	PlayerSeat    int64
-	OpponentID    string
-	OpponentName  string
+	ID                 string
+	TileOwners         []byte
+	CurrentPlayer      int64
+	Status             string
+	Version            int64
+	UpdatedAt          time.Time
+	PlayerSeat         int64
+	OpponentID         string
+	OpponentName       string
+	OpponentType       string
+	OpponentBotProfile *BotProfileSnapshot
 }
 
 // GameAllocation is a durable request to assign two players to one game.
@@ -99,7 +112,25 @@ type RegisteredPlayer struct {
 	ID             string
 	DisplayName    string
 	NormalizedName string
+	PlayerType     string
 	CreatedAt      time.Time
+}
+
+// BotProfile is one immutable version of managed bot configuration.
+type BotProfile struct {
+	PlayerID              string
+	ConfigurationVersion  int64
+	Style                 string
+	EnglishKnowledgeLevel string
+	SkillLevel            string
+	Enabled               bool
+	CreatedAt             time.Time
+}
+
+// ManagedBot combines a registered bot identity with one profile version.
+type ManagedBot struct {
+	Player  RegisteredPlayer
+	Profile BotProfile
 }
 
 // PlayerSession is one independently revocable registered-player session.
@@ -220,7 +251,7 @@ func (repository *Repository) CreateRegisteredPlayerSession(
 
 	rows, err := queries.CreateRegisteredPlayer(ctx, generated.CreateRegisteredPlayerParams{
 		ID: candidate.ID, DisplayName: candidate.DisplayName,
-		NormalizedName: candidate.NormalizedName, CreatedAt: candidate.CreatedAt,
+		NormalizedName: candidate.NormalizedName, CreatedAt: candidate.CreatedAt, PlayerType: "human",
 	})
 	if err != nil {
 		return RegisteredPlayer{}, false, fmt.Errorf("create registered player: %w", err)
@@ -229,7 +260,10 @@ func (repository *Repository) CreateRegisteredPlayerSession(
 	if err != nil {
 		return RegisteredPlayer{}, false, fmt.Errorf("get registered player: %w", err)
 	}
-	player := registeredPlayerFromRow(row)
+	player := registeredPlayer(row.ID, row.DisplayName, row.NormalizedName, row.PlayerType, row.CreatedAt)
+	if player.PlayerType != "human" {
+		return RegisteredPlayer{}, false, ErrManagedBotSession
+	}
 	if err := queries.CreatePlayerSession(ctx, generated.CreatePlayerSessionParams{
 		TokenHash: session.TokenHash[:], PlayerID: player.ID,
 		ExpiresAt: session.ExpiresAt, CreatedAt: session.CreatedAt,
@@ -240,6 +274,82 @@ func (repository *Repository) CreateRegisteredPlayerSession(
 		return RegisteredPlayer{}, false, fmt.Errorf("commit player session transaction: %w", err)
 	}
 	return player, rows == 1, nil
+}
+
+// CreateManagedBot is a trusted administration boundary; callers supply only a credential hash.
+func (repository *Repository) CreateManagedBot(
+	ctx context.Context,
+	player RegisteredPlayer,
+	profile BotProfile,
+	credentialHash [32]byte,
+) (ManagedBot, error) {
+	if player.PlayerType != "bot" || profile.PlayerID != player.ID || profile.ConfigurationVersion < 1 {
+		return ManagedBot{}, errors.New("invalid managed bot")
+	}
+	connection, err := repository.database.Conn(ctx)
+	if err != nil {
+		return ManagedBot{}, fmt.Errorf("acquire managed bot connection: %w", err)
+	}
+	defer connection.Close()
+	if _, err := connection.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+		return ManagedBot{}, fmt.Errorf("begin managed bot transaction: %w", err)
+	}
+	defer func() { _, _ = connection.ExecContext(context.Background(), "ROLLBACK") }()
+	queries := generated.New(connection)
+	rows, err := queries.CreateRegisteredPlayer(ctx, generated.CreateRegisteredPlayerParams{
+		ID: player.ID, DisplayName: player.DisplayName, NormalizedName: player.NormalizedName,
+		CreatedAt: player.CreatedAt, PlayerType: "bot",
+	})
+	if err != nil || rows != 1 {
+		if err == nil {
+			err = errors.New("managed bot identity already exists")
+		}
+		return ManagedBot{}, fmt.Errorf("create managed bot identity: %w", err)
+	}
+	if err := queries.CreateBotProfileVersion(ctx, botProfileParams(profile)); err != nil {
+		return ManagedBot{}, fmt.Errorf("create managed bot profile: %w", err)
+	}
+	if err := queries.CreateBotRuntimeCredential(ctx, generated.CreateBotRuntimeCredentialParams{
+		TokenHash: credentialHash[:], PlayerID: player.ID, CreatedAt: profile.CreatedAt,
+	}); err != nil {
+		return ManagedBot{}, fmt.Errorf("create bot runtime credential: %w", err)
+	}
+	if _, err := connection.ExecContext(ctx, "COMMIT"); err != nil {
+		return ManagedBot{}, fmt.Errorf("commit managed bot: %w", err)
+	}
+	return ManagedBot{Player: player, Profile: profile}, nil
+}
+
+// CreateBotProfileVersion appends immutable trusted configuration.
+func (repository *Repository) CreateBotProfileVersion(ctx context.Context, profile BotProfile) error {
+	if profile.ConfigurationVersion < 1 {
+		return errors.New("bot profile version must be positive")
+	}
+	if err := repository.queries.CreateBotProfileVersion(ctx, botProfileParams(profile)); err != nil {
+		return fmt.Errorf("create bot profile version: %w", err)
+	}
+	return nil
+}
+
+// GetLatestEnabledBotProfile resolves the active version for later allocation.
+func (repository *Repository) GetLatestEnabledBotProfile(ctx context.Context, playerID string) (ManagedBot, error) {
+	row, err := repository.queries.GetLatestEnabledBotProfile(ctx, playerID)
+	if err != nil {
+		return ManagedBot{}, err
+	}
+	return ManagedBot{
+		Player:  RegisteredPlayer{ID: row.ID, DisplayName: row.DisplayName, NormalizedName: row.NormalizedName, PlayerType: row.PlayerType, CreatedAt: row.CreatedAt},
+		Profile: BotProfile{PlayerID: row.ID, ConfigurationVersion: row.ConfigurationVersion, Style: row.Style, EnglishKnowledgeLevel: row.EnglishKnowledgeLevel, SkillLevel: row.SkillLevel, Enabled: row.Enabled == 1, CreatedAt: row.ProfileCreatedAt},
+	}, nil
+}
+
+// AuthenticateBotRuntime resolves a managed bot from a SHA-256 credential hash.
+func (repository *Repository) AuthenticateBotRuntime(ctx context.Context, credentialHash [32]byte) (RegisteredPlayer, error) {
+	row, err := repository.queries.GetBotByRuntimeCredentialHash(ctx, credentialHash[:])
+	if err != nil {
+		return RegisteredPlayer{}, err
+	}
+	return RegisteredPlayer{ID: row.ID, DisplayName: row.DisplayName, NormalizedName: row.NormalizedName, PlayerType: row.PlayerType, CreatedAt: row.CreatedAt}, nil
 }
 
 // GetRegisteredPlayerBySessionHash authenticates one unexpired session.
@@ -254,7 +364,7 @@ func (repository *Repository) GetRegisteredPlayerBySessionHash(
 	if err != nil {
 		return RegisteredPlayer{}, fmt.Errorf("get registered player by session hash: %w", err)
 	}
-	return registeredPlayerFromRow(row), nil
+	return registeredPlayer(row.ID, row.DisplayName, row.NormalizedName, row.PlayerType, row.CreatedAt), nil
 }
 
 // GetRegisteredPlayerByID resolves a public identity selected for allocation.
@@ -263,7 +373,7 @@ func (repository *Repository) GetRegisteredPlayerByID(ctx context.Context, id st
 	if err != nil {
 		return RegisteredPlayer{}, fmt.Errorf("get registered player by ID: %w", err)
 	}
-	return registeredPlayerFromRow(row), nil
+	return registeredPlayer(row.ID, row.DisplayName, row.NormalizedName, row.PlayerType, row.CreatedAt), nil
 }
 
 // DeletePlayerSession revokes only the session identified by tokenHash.
@@ -379,7 +489,7 @@ func (repository *Repository) MatchRandomAllocation(ctx context.Context, allocat
 		return GameAllocation{}, false, fmt.Errorf("create matched game: %w", err)
 	}
 	for seat, playerID := range []string{candidate.RequesterID, allocation.RequesterID} {
-		if err := queries.CreateGameSeat(ctx, generated.CreateGameSeatParams{
+		if err := createGameSeat(ctx, queries, GameSeat{
 			GameID: game.ID, Seat: int64(seat + 1), PlayerID: playerID, CreatedAt: game.CreatedAt,
 		}); err != nil {
 			return GameAllocation{}, false, fmt.Errorf("create matched game seat: %w", err)
@@ -573,9 +683,7 @@ func (repository *Repository) CompleteGameAllocation(
 		return GameAllocation{}, fmt.Errorf("create allocated game: %w", err)
 	}
 	for _, seat := range seats {
-		if err := queries.CreateGameSeat(ctx, generated.CreateGameSeatParams{
-			GameID: seat.GameID, Seat: seat.Seat, PlayerID: seat.PlayerID, CreatedAt: seat.CreatedAt,
-		}); err != nil {
+		if err := createGameSeat(ctx, queries, seat); err != nil {
 			return GameAllocation{}, fmt.Errorf("create allocated seat %d: %w", seat.Seat, err)
 		}
 	}
@@ -624,12 +732,7 @@ func (repository *Repository) CreateGame(ctx context.Context, game Game, seats [
 		if seat.GameID != game.ID {
 			return fmt.Errorf("seat %d belongs to game %q, want %q", index+1, seat.GameID, game.ID)
 		}
-		if err := queries.CreateGameSeat(ctx, generated.CreateGameSeatParams{
-			GameID:    seat.GameID,
-			Seat:      seat.Seat,
-			PlayerID:  seat.PlayerID,
-			CreatedAt: seat.CreatedAt,
-		}); err != nil {
+		if err := createGameSeat(ctx, queries, seat); err != nil {
 			return fmt.Errorf("create game seat %d: %w", seat.Seat, err)
 		}
 	}
@@ -666,10 +769,17 @@ func (repository *Repository) ListGameSeats(ctx context.Context, gameID string) 
 	}
 	seats := make([]GameSeat, 0, len(rows))
 	for _, row := range rows {
-		seats = append(seats, GameSeat{
+		seat := GameSeat{
 			GameID: row.GameID, Seat: row.Seat,
 			PlayerID: row.PlayerID, CreatedAt: row.CreatedAt,
-		})
+		}
+		profile, profileErr := repository.queries.GetGameSeatBotProfile(ctx, generated.GetGameSeatBotProfileParams{GameID: row.GameID, Seat: row.Seat})
+		if profileErr == nil {
+			seat.BotProfile = &BotProfileSnapshot{ConfigurationVersion: profile.ConfigurationVersion, Style: profile.Style, EnglishKnowledgeLevel: profile.EnglishKnowledgeLevel, SkillLevel: profile.SkillLevel}
+		} else if !errors.Is(profileErr, sql.ErrNoRows) {
+			return nil, fmt.Errorf("get game seat bot profile: %w", profileErr)
+		}
+		seats = append(seats, seat)
 	}
 	return seats, nil
 }
@@ -701,11 +811,21 @@ func (repository *Repository) ListActiveGamesForPlayer(
 	}
 	items := make([]ActiveGameSummary, 0, len(rows))
 	for _, row := range rows {
-		items = append(items, ActiveGameSummary{
+		item := ActiveGameSummary{
 			ID: row.ID, TileOwners: cloneBytes(row.TileOwners), CurrentPlayer: row.CurrentPlayer,
 			Status: row.Status, Version: row.Version, UpdatedAt: row.UpdatedAt,
 			PlayerSeat: row.PlayerSeat, OpponentID: row.OpponentID, OpponentName: row.OpponentName,
-		})
+			OpponentType: row.OpponentType,
+		}
+		if row.OpponentProfileVersion.Valid {
+			item.OpponentBotProfile = &BotProfileSnapshot{
+				ConfigurationVersion:  row.OpponentProfileVersion.Int64,
+				Style:                 row.OpponentStyle.String,
+				EnglishKnowledgeLevel: row.OpponentEnglishKnowledgeLevel.String,
+				SkillLevel:            row.OpponentSkillLevel.String,
+			}
+		}
+		items = append(items, item)
 	}
 	return items, nil
 }
@@ -725,7 +845,7 @@ func (repository *Repository) SearchRegisteredPlayers(
 	}
 	players := make([]RegisteredPlayer, 0, len(rows))
 	for _, row := range rows {
-		players = append(players, registeredPlayerFromRow(row))
+		players = append(players, registeredPlayer(row.ID, row.DisplayName, row.NormalizedName, row.PlayerType, row.CreatedAt))
 	}
 	return players, nil
 }
@@ -907,11 +1027,40 @@ func cloneBytes(value []byte) []byte {
 	return append([]byte(nil), value...)
 }
 
-func registeredPlayerFromRow(row generated.RegisteredPlayer) RegisteredPlayer {
+func registeredPlayer(id, displayName, normalizedName, playerType string, createdAt time.Time) RegisteredPlayer {
 	return RegisteredPlayer{
-		ID: row.ID, DisplayName: row.DisplayName,
-		NormalizedName: row.NormalizedName, CreatedAt: row.CreatedAt,
+		ID: id, DisplayName: displayName,
+		NormalizedName: normalizedName, PlayerType: playerType, CreatedAt: createdAt,
 	}
+}
+
+func botProfileParams(profile BotProfile) generated.CreateBotProfileVersionParams {
+	enabled := int64(0)
+	if profile.Enabled {
+		enabled = 1
+	}
+	return generated.CreateBotProfileVersionParams{
+		PlayerID: profile.PlayerID, ConfigurationVersion: profile.ConfigurationVersion,
+		Style: profile.Style, EnglishKnowledgeLevel: profile.EnglishKnowledgeLevel,
+		SkillLevel: profile.SkillLevel, Enabled: enabled, CreatedAt: profile.CreatedAt,
+	}
+}
+
+func createGameSeat(ctx context.Context, queries *generated.Queries, seat GameSeat) error {
+	if err := queries.CreateGameSeat(ctx, generated.CreateGameSeatParams{
+		GameID: seat.GameID, Seat: seat.Seat, PlayerID: seat.PlayerID, CreatedAt: seat.CreatedAt,
+	}); err != nil {
+		return err
+	}
+	if seat.BotProfile == nil {
+		return nil
+	}
+	return queries.CreateGameSeatBotProfile(ctx, generated.CreateGameSeatBotProfileParams{
+		GameID: seat.GameID, Seat: seat.Seat, PlayerID: seat.PlayerID,
+		ConfigurationVersion: seat.BotProfile.ConfigurationVersion,
+		Style:                seat.BotProfile.Style, EnglishKnowledgeLevel: seat.BotProfile.EnglishKnowledgeLevel,
+		SkillLevel: seat.BotProfile.SkillLevel,
+	})
 }
 
 func allocationFromRow(row generated.GameAllocation) GameAllocation {

@@ -7,6 +7,7 @@ package db
 
 import (
 	"context"
+	"database/sql"
 	"time"
 )
 
@@ -30,6 +31,63 @@ func (q *Queries) CreateGameSeat(ctx context.Context, arg CreateGameSeatParams) 
 		arg.CreatedAt,
 	)
 	return err
+}
+
+const createGameSeatBotProfile = `-- name: CreateGameSeatBotProfile :exec
+INSERT INTO game_seat_bot_profiles (
+    game_id, seat, player_id, configuration_version,
+    style, english_knowledge_level, skill_level
+) VALUES (?, ?, ?, ?, ?, ?, ?)
+`
+
+type CreateGameSeatBotProfileParams struct {
+	GameID                string `json:"game_id"`
+	Seat                  int64  `json:"seat"`
+	PlayerID              string `json:"player_id"`
+	ConfigurationVersion  int64  `json:"configuration_version"`
+	Style                 string `json:"style"`
+	EnglishKnowledgeLevel string `json:"english_knowledge_level"`
+	SkillLevel            string `json:"skill_level"`
+}
+
+func (q *Queries) CreateGameSeatBotProfile(ctx context.Context, arg CreateGameSeatBotProfileParams) error {
+	_, err := q.db.ExecContext(ctx, createGameSeatBotProfile,
+		arg.GameID,
+		arg.Seat,
+		arg.PlayerID,
+		arg.ConfigurationVersion,
+		arg.Style,
+		arg.EnglishKnowledgeLevel,
+		arg.SkillLevel,
+	)
+	return err
+}
+
+const getGameSeatBotProfile = `-- name: GetGameSeatBotProfile :one
+SELECT game_id, seat, player_id, configuration_version,
+       style, english_knowledge_level, skill_level
+FROM game_seat_bot_profiles
+WHERE game_id = ? AND seat = ?
+`
+
+type GetGameSeatBotProfileParams struct {
+	GameID string `json:"game_id"`
+	Seat   int64  `json:"seat"`
+}
+
+func (q *Queries) GetGameSeatBotProfile(ctx context.Context, arg GetGameSeatBotProfileParams) (GameSeatBotProfile, error) {
+	row := q.db.QueryRowContext(ctx, getGameSeatBotProfile, arg.GameID, arg.Seat)
+	var i GameSeatBotProfile
+	err := row.Scan(
+		&i.GameID,
+		&i.Seat,
+		&i.PlayerID,
+		&i.ConfigurationVersion,
+		&i.Style,
+		&i.EnglishKnowledgeLevel,
+		&i.SkillLevel,
+	)
+	return i, err
 }
 
 const getGameSeatByPlayer = `-- name: GetGameSeatByPlayer :one
@@ -65,11 +123,18 @@ SELECT
     g.updated_at,
     own.seat AS player_seat,
     opponent.player_id AS opponent_id,
-    opponent_player.display_name AS opponent_name
+    opponent_player.display_name AS opponent_name,
+    opponent_player.player_type AS opponent_type,
+    opponent_profile.configuration_version AS opponent_profile_version,
+    opponent_profile.style AS opponent_style,
+    opponent_profile.english_knowledge_level AS opponent_english_knowledge_level,
+    opponent_profile.skill_level AS opponent_skill_level
 FROM game_seats AS own
 JOIN games AS g ON g.id = own.game_id
 JOIN game_seats AS opponent ON opponent.game_id = g.id AND opponent.seat != own.seat
 JOIN registered_players AS opponent_player ON opponent_player.id = opponent.player_id
+LEFT JOIN game_seat_bot_profiles AS opponent_profile
+    ON opponent_profile.game_id = opponent.game_id AND opponent_profile.seat = opponent.seat
 WHERE own.player_id = ?1
   AND g.status = 'active'
   AND (
@@ -88,15 +153,20 @@ type ListActiveGamesForPlayerParams struct {
 }
 
 type ListActiveGamesForPlayerRow struct {
-	ID            string    `json:"id"`
-	TileOwners    []byte    `json:"tile_owners"`
-	CurrentPlayer int64     `json:"current_player"`
-	Status        string    `json:"status"`
-	Version       int64     `json:"version"`
-	UpdatedAt     time.Time `json:"updated_at"`
-	PlayerSeat    int64     `json:"player_seat"`
-	OpponentID    string    `json:"opponent_id"`
-	OpponentName  string    `json:"opponent_name"`
+	ID                            string         `json:"id"`
+	TileOwners                    []byte         `json:"tile_owners"`
+	CurrentPlayer                 int64          `json:"current_player"`
+	Status                        string         `json:"status"`
+	Version                       int64          `json:"version"`
+	UpdatedAt                     time.Time      `json:"updated_at"`
+	PlayerSeat                    int64          `json:"player_seat"`
+	OpponentID                    string         `json:"opponent_id"`
+	OpponentName                  string         `json:"opponent_name"`
+	OpponentType                  string         `json:"opponent_type"`
+	OpponentProfileVersion        sql.NullInt64  `json:"opponent_profile_version"`
+	OpponentStyle                 sql.NullString `json:"opponent_style"`
+	OpponentEnglishKnowledgeLevel sql.NullString `json:"opponent_english_knowledge_level"`
+	OpponentSkillLevel            sql.NullString `json:"opponent_skill_level"`
 }
 
 func (q *Queries) ListActiveGamesForPlayer(ctx context.Context, arg ListActiveGamesForPlayerParams) ([]ListActiveGamesForPlayerRow, error) {
@@ -123,6 +193,11 @@ func (q *Queries) ListActiveGamesForPlayer(ctx context.Context, arg ListActiveGa
 			&i.PlayerSeat,
 			&i.OpponentID,
 			&i.OpponentName,
+			&i.OpponentType,
+			&i.OpponentProfileVersion,
+			&i.OpponentStyle,
+			&i.OpponentEnglishKnowledgeLevel,
+			&i.OpponentSkillLevel,
 		); err != nil {
 			return nil, err
 		}

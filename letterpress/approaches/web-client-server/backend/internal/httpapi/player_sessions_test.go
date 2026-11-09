@@ -68,6 +68,11 @@ func TestPlayerSessionRejectsInvalidNamesJSONOriginAndExpiredCredentials(t *test
 			t.Fatalf("invalid name %q set a cookie", name)
 		}
 	}
+	botLogin, _ := enterPlayer(t, handler, "Balanced Bot")
+	assertAPIError(t, botLogin, http.StatusUnprocessableEntity, "invalid_player_name")
+	if len(botLogin.Result().Cookies()) != 0 {
+		t.Fatal("managed bot name entry set a public session cookie")
+	}
 
 	badJSON := newMutationRequest(http.MethodPost, "/api/v1/player-sessions", bytes.NewBufferString(`{"name":true}`))
 	badJSON.Header.Set("Content-Type", "application/json")

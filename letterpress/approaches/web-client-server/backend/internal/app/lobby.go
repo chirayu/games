@@ -28,9 +28,18 @@ type Page[T any] struct {
 
 // PublicPlayer is the non-secret identity exposed in discovery and game summaries.
 type PublicPlayer struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-	Type string `json:"type"`
+	ID         string            `json:"id"`
+	Name       string            `json:"name"`
+	Type       string            `json:"type"`
+	BotProfile *PublicBotProfile `json:"botProfile,omitempty"`
+}
+
+// PublicBotProfile contains only safe, immutable game-time profile labels.
+type PublicBotProfile struct {
+	ConfigurationVersion  int64  `json:"configurationVersion"`
+	Style                 string `json:"style"`
+	EnglishKnowledgeLevel string `json:"englishKnowledgeLevel"`
+	SkillLevel            string `json:"skillLevel"`
 }
 
 // ActiveGameSummary is the compact participant-scoped lobby representation.
@@ -84,8 +93,17 @@ func (service *Service) ListActiveGames(ctx context.Context, token, cursor strin
 				scores.PlayerTwo++
 			}
 		}
+		opponent := PublicPlayer{ID: row.OpponentID, Name: row.OpponentName, Type: row.OpponentType}
+		if row.OpponentBotProfile != nil {
+			opponent.BotProfile = &PublicBotProfile{
+				ConfigurationVersion:  row.OpponentBotProfile.ConfigurationVersion,
+				Style:                 row.OpponentBotProfile.Style,
+				EnglishKnowledgeLevel: row.OpponentBotProfile.EnglishKnowledgeLevel,
+				SkillLevel:            row.OpponentBotProfile.SkillLevel,
+			}
+		}
 		page.Items = append(page.Items, ActiveGameSummary{
-			ID: row.ID, Opponent: PublicPlayer{ID: row.OpponentID, Name: row.OpponentName, Type: "human"},
+			ID: row.ID, Opponent: opponent,
 			PlayerSeat: row.PlayerSeat, ActivePlayer: row.CurrentPlayer, Status: row.Status,
 			Scores: scores, Version: row.Version, LastActivity: row.UpdatedAt,
 		})
@@ -128,7 +146,7 @@ func (service *Service) SearchPlayers(ctx context.Context, token, query, cursor 
 	}
 	page := Page[PublicPlayer]{Items: make([]PublicPlayer, 0, min(len(rows), limit))}
 	for _, row := range rows[:min(len(rows), limit)] {
-		page.Items = append(page.Items, PublicPlayer{ID: row.ID, Name: row.DisplayName, Type: "human"})
+		page.Items = append(page.Items, PublicPlayer{ID: row.ID, Name: row.DisplayName, Type: row.PlayerType})
 	}
 	if len(rows) > limit {
 		last := rows[limit-1]

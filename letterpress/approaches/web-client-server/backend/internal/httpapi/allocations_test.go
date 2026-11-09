@@ -38,6 +38,7 @@ func TestAllocationAPIIsIdempotentPrivateAndCancellable(t *testing.T) {
 		t.Fatalf("duplicate challenge ID = %q, want %q", duplicate.ID, created.ID)
 	}
 	createAllocationRequest(t, handler, aliceCookie, "challenge-1", "random", "", http.StatusConflict)
+	createAllocationRequest(t, handler, aliceCookie, "managed-bot-as-human", "specified", "bot-balanced-v1", http.StatusUnprocessableEntity)
 
 	if got := getAllocationRequest(t, handler, bobCookie, created.ID, http.StatusOK); got.ID != created.ID {
 		t.Fatalf("opponent allocation = %#v", got)

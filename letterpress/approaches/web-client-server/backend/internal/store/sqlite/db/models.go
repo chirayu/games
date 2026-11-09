@@ -9,6 +9,22 @@ import (
 	"time"
 )
 
+type BotProfile struct {
+	PlayerID              string    `json:"player_id"`
+	ConfigurationVersion  int64     `json:"configuration_version"`
+	Style                 string    `json:"style"`
+	EnglishKnowledgeLevel string    `json:"english_knowledge_level"`
+	SkillLevel            string    `json:"skill_level"`
+	Enabled               int64     `json:"enabled"`
+	CreatedAt             time.Time `json:"created_at"`
+}
+
+type BotRuntimeCredential struct {
+	TokenHash []byte    `json:"token_hash"`
+	PlayerID  string    `json:"player_id"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
 type Game struct {
 	ID            string    `json:"id"`
 	BoardLetters  []byte    `json:"board_letters"`
@@ -42,6 +58,16 @@ type GameSeat struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+type GameSeatBotProfile struct {
+	GameID                string `json:"game_id"`
+	Seat                  int64  `json:"seat"`
+	PlayerID              string `json:"player_id"`
+	ConfigurationVersion  int64  `json:"configuration_version"`
+	Style                 string `json:"style"`
+	EnglishKnowledgeLevel string `json:"english_knowledge_level"`
+	SkillLevel            string `json:"skill_level"`
+}
+
 type Move struct {
 	ID          int64     `json:"id"`
 	GameID      string    `json:"game_id"`
@@ -64,4 +90,5 @@ type RegisteredPlayer struct {
 	DisplayName    string    `json:"display_name"`
 	NormalizedName string    `json:"normalized_name"`
 	CreatedAt      time.Time `json:"created_at"`
+	PlayerType     string    `json:"player_type"`
 }

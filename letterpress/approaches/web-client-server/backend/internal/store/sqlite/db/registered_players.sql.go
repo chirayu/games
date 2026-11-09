@@ -33,8 +33,8 @@ func (q *Queries) CreatePlayerSession(ctx context.Context, arg CreatePlayerSessi
 }
 
 const createRegisteredPlayer = `-- name: CreateRegisteredPlayer :execrows
-INSERT OR IGNORE INTO registered_players (id, display_name, normalized_name, created_at)
-VALUES (?, ?, ?, ?)
+INSERT OR IGNORE INTO registered_players (id, display_name, normalized_name, created_at, player_type)
+VALUES (?, ?, ?, ?, ?)
 `
 
 type CreateRegisteredPlayerParams struct {
@@ -42,6 +42,7 @@ type CreateRegisteredPlayerParams struct {
 	DisplayName    string    `json:"display_name"`
 	NormalizedName string    `json:"normalized_name"`
 	CreatedAt      time.Time `json:"created_at"`
+	PlayerType     string    `json:"player_type"`
 }
 
 func (q *Queries) CreateRegisteredPlayer(ctx context.Context, arg CreateRegisteredPlayerParams) (int64, error) {
@@ -50,6 +51,7 @@ func (q *Queries) CreateRegisteredPlayer(ctx context.Context, arg CreateRegister
 		arg.DisplayName,
 		arg.NormalizedName,
 		arg.CreatedAt,
+		arg.PlayerType,
 	)
 	if err != nil {
 		return 0, err
@@ -71,43 +73,61 @@ func (q *Queries) DeletePlayerSession(ctx context.Context, tokenHash []byte) (in
 }
 
 const getRegisteredPlayerByID = `-- name: GetRegisteredPlayerByID :one
-SELECT id, display_name, normalized_name, created_at
+SELECT id, display_name, normalized_name, player_type, created_at
 FROM registered_players
 WHERE id = ?
 `
 
-func (q *Queries) GetRegisteredPlayerByID(ctx context.Context, id string) (RegisteredPlayer, error) {
+type GetRegisteredPlayerByIDRow struct {
+	ID             string    `json:"id"`
+	DisplayName    string    `json:"display_name"`
+	NormalizedName string    `json:"normalized_name"`
+	PlayerType     string    `json:"player_type"`
+	CreatedAt      time.Time `json:"created_at"`
+}
+
+func (q *Queries) GetRegisteredPlayerByID(ctx context.Context, id string) (GetRegisteredPlayerByIDRow, error) {
 	row := q.db.QueryRowContext(ctx, getRegisteredPlayerByID, id)
-	var i RegisteredPlayer
+	var i GetRegisteredPlayerByIDRow
 	err := row.Scan(
 		&i.ID,
 		&i.DisplayName,
 		&i.NormalizedName,
+		&i.PlayerType,
 		&i.CreatedAt,
 	)
 	return i, err
 }
 
 const getRegisteredPlayerByNormalizedName = `-- name: GetRegisteredPlayerByNormalizedName :one
-SELECT id, display_name, normalized_name, created_at
+SELECT id, display_name, normalized_name, player_type, created_at
 FROM registered_players
 WHERE normalized_name = ?
 `
 
-func (q *Queries) GetRegisteredPlayerByNormalizedName(ctx context.Context, normalizedName string) (RegisteredPlayer, error) {
+type GetRegisteredPlayerByNormalizedNameRow struct {
+	ID             string    `json:"id"`
+	DisplayName    string    `json:"display_name"`
+	NormalizedName string    `json:"normalized_name"`
+	PlayerType     string    `json:"player_type"`
+	CreatedAt      time.Time `json:"created_at"`
+}
+
+func (q *Queries) GetRegisteredPlayerByNormalizedName(ctx context.Context, normalizedName string) (GetRegisteredPlayerByNormalizedNameRow, error) {
 	row := q.db.QueryRowContext(ctx, getRegisteredPlayerByNormalizedName, normalizedName)
-	var i RegisteredPlayer
+	var i GetRegisteredPlayerByNormalizedNameRow
 	err := row.Scan(
 		&i.ID,
 		&i.DisplayName,
 		&i.NormalizedName,
+		&i.PlayerType,
 		&i.CreatedAt,
 	)
 	return i, err
 }
 
 const getRegisteredPlayerBySessionHash = `-- name: GetRegisteredPlayerBySessionHash :one
-SELECT p.id, p.display_name, p.normalized_name, p.created_at
+SELECT p.id, p.display_name, p.normalized_name, p.player_type, p.created_at
 FROM player_sessions AS s
 JOIN registered_players AS p ON p.id = s.player_id
 WHERE s.token_hash = ? AND s.expires_at > ?
@@ -118,22 +138,32 @@ type GetRegisteredPlayerBySessionHashParams struct {
 	ExpiresAt time.Time `json:"expires_at"`
 }
 
-func (q *Queries) GetRegisteredPlayerBySessionHash(ctx context.Context, arg GetRegisteredPlayerBySessionHashParams) (RegisteredPlayer, error) {
+type GetRegisteredPlayerBySessionHashRow struct {
+	ID             string    `json:"id"`
+	DisplayName    string    `json:"display_name"`
+	NormalizedName string    `json:"normalized_name"`
+	PlayerType     string    `json:"player_type"`
+	CreatedAt      time.Time `json:"created_at"`
+}
+
+func (q *Queries) GetRegisteredPlayerBySessionHash(ctx context.Context, arg GetRegisteredPlayerBySessionHashParams) (GetRegisteredPlayerBySessionHashRow, error) {
 	row := q.db.QueryRowContext(ctx, getRegisteredPlayerBySessionHash, arg.TokenHash, arg.ExpiresAt)
-	var i RegisteredPlayer
+	var i GetRegisteredPlayerBySessionHashRow
 	err := row.Scan(
 		&i.ID,
 		&i.DisplayName,
 		&i.NormalizedName,
+		&i.PlayerType,
 		&i.CreatedAt,
 	)
 	return i, err
 }
 
 const searchRegisteredPlayers = `-- name: SearchRegisteredPlayers :many
-SELECT id, display_name, normalized_name, created_at
+SELECT id, display_name, normalized_name, player_type, created_at
 FROM registered_players
 WHERE id != ?1
+  AND player_type = 'human'
   AND instr(normalized_name, ?2) > 0
   AND (
       normalized_name > ?3
@@ -151,7 +181,15 @@ type SearchRegisteredPlayersParams struct {
 	ResultLimit      int64  `json:"result_limit"`
 }
 
-func (q *Queries) SearchRegisteredPlayers(ctx context.Context, arg SearchRegisteredPlayersParams) ([]RegisteredPlayer, error) {
+type SearchRegisteredPlayersRow struct {
+	ID             string    `json:"id"`
+	DisplayName    string    `json:"display_name"`
+	NormalizedName string    `json:"normalized_name"`
+	PlayerType     string    `json:"player_type"`
+	CreatedAt      time.Time `json:"created_at"`
+}
+
+func (q *Queries) SearchRegisteredPlayers(ctx context.Context, arg SearchRegisteredPlayersParams) ([]SearchRegisteredPlayersRow, error) {
 	rows, err := q.db.QueryContext(ctx, searchRegisteredPlayers,
 		arg.ExcludedPlayerID,
 		arg.NameFragment,
@@ -163,13 +201,14 @@ func (q *Queries) SearchRegisteredPlayers(ctx context.Context, arg SearchRegiste
 		return nil, err
 	}
 	defer rows.Close()
-	items := []RegisteredPlayer{}
+	items := []SearchRegisteredPlayersRow{}
 	for rows.Next() {
-		var i RegisteredPlayer
+		var i SearchRegisteredPlayersRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.DisplayName,
 			&i.NormalizedName,
+			&i.PlayerType,
 			&i.CreatedAt,
 		); err != nil {
 			return nil, err

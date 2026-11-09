@@ -28,6 +28,7 @@ var (
 type RegisteredPlayer struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
+	Type string `json:"type"`
 }
 
 // PlayerLogin is a newly established independent browser session.
@@ -60,10 +61,13 @@ func (service *Service) EnterPlayer(ctx context.Context, rawName string) (Player
 		TokenHash: tokenHash, PlayerID: playerID, ExpiresAt: expiresAt, CreatedAt: now,
 	})
 	if err != nil {
+		if errors.Is(err, sqlite.ErrManagedBotSession) {
+			return PlayerLogin{}, ErrInvalidPlayerName
+		}
 		return PlayerLogin{}, fmt.Errorf("establish player session: %w", err)
 	}
 	return PlayerLogin{
-		Player: RegisteredPlayer{ID: stored.ID, Name: stored.DisplayName},
+		Player: RegisteredPlayer{ID: stored.ID, Name: stored.DisplayName, Type: stored.PlayerType},
 		Token:  token, ExpiresAt: expiresAt, Created: created,
 	}, nil
 }
@@ -81,7 +85,7 @@ func (service *Service) CurrentPlayer(ctx context.Context, token string) (Regist
 	if err != nil {
 		return RegisteredPlayer{}, fmt.Errorf("authenticate player session: %w", err)
 	}
-	return RegisteredPlayer{ID: stored.ID, Name: stored.DisplayName}, nil
+	return RegisteredPlayer{ID: stored.ID, Name: stored.DisplayName, Type: stored.PlayerType}, nil
 }
 
 // LogoutPlayer revokes only the supplied registered-player session.

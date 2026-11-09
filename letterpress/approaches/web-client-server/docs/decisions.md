@@ -50,3 +50,8 @@ ticket intentionally changes one.
     player or random human matchmaking. Pending starts are restored from durable
     allocations; there is no invitation link, transferable seat credential,
     direct public game creation, or compatibility route.
+13. **Managed bots are registered players.** Bots occupy ordinary game seats
+    and differ through a managed player type and immutable versioned profile.
+    Each bot seat snapshots its allocation-time profile. Public name sessions
+    remain human-only; the runtime uses a separate high-entropy credential whose
+    SHA-256 hash is the only persisted secret material.
