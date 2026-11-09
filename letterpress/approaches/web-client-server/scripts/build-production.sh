@@ -20,6 +20,7 @@ mkdir -p "$temporary/licenses"
 cp "$backend/internal/game/dictionary/LICENSE-ESDB.txt" "$temporary/licenses/ESDB.txt"
 cd "$backend"
 go build -trimpath -ldflags="-s -w" -o "$temporary/letterpress" ./cmd/server
+go build -trimpath -ldflags="-s -w" -o "$temporary/letterpress-bot" ./cmd/bot-runtime
 rm -rf "$output"
 mv "$temporary" "$output"
 trap - EXIT HUP INT TERM

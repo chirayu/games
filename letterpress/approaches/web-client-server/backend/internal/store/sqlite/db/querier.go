@@ -34,6 +34,7 @@ type Querier interface {
 	GetGameAllocation(ctx context.Context, id string) (GameAllocation, error)
 	GetGameAllocationByRequesterKey(ctx context.Context, arg GetGameAllocationByRequesterKeyParams) (GameAllocation, error)
 	GetGameSeatBotProfile(ctx context.Context, arg GetGameSeatBotProfileParams) (GameSeatBotProfile, error)
+	GetGameSeatByNumber(ctx context.Context, arg GetGameSeatByNumberParams) (GameSeat, error)
 	GetGameSeatByPlayer(ctx context.Context, arg GetGameSeatByPlayerParams) (GameSeat, error)
 	GetLatestEnabledBotProfile(ctx context.Context, id string) (GetLatestEnabledBotProfileRow, error)
 	GetQueuedRandomAllocation(ctx context.Context, arg GetQueuedRandomAllocationParams) (GameAllocation, error)
@@ -46,6 +47,8 @@ type Querier interface {
 	ListLatestEnabledBotProfiles(ctx context.Context) ([]ListLatestEnabledBotProfilesRow, error)
 	ListMoves(ctx context.Context, gameID string) ([]Move, error)
 	ListPendingSpecifiedChallenges(ctx context.Context, arg ListPendingSpecifiedChallengesParams) ([]ListPendingSpecifiedChallengesRow, error)
+	ListPendingTurnsForBot(ctx context.Context, arg ListPendingTurnsForBotParams) ([]ListPendingTurnsForBotRow, error)
+	PutBotRuntimeCredential(ctx context.Context, arg PutBotRuntimeCredentialParams) error
 	SearchRegisteredPlayers(ctx context.Context, arg SearchRegisteredPlayersParams) ([]SearchRegisteredPlayersRow, error)
 	UpdateGameState(ctx context.Context, arg UpdateGameStateParams) (int64, error)
 }

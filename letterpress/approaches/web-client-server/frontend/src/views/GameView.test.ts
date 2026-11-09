@@ -52,6 +52,12 @@ function gameState(): GameState {
     })),
     scores: { playerOne: 1, playerTwo: 1 },
     activePlayer: 1,
+    activePlayerMetadata: {
+      id: "p1",
+      displayName: "Alice",
+      playerType: "human",
+      thinking: false,
+    },
     playerSeat: 1,
     version: 3,
     status: "active",
@@ -111,6 +117,28 @@ describe("GameView", () => {
     ).toBe(true);
     expect(wrapper.get('[role="gridcell"]').attributes("aria-disabled")).toBe(
       "true",
+    );
+  });
+
+  it("shows the normal bot-thinking state from current-player metadata", async () => {
+    const state = gameState();
+    state.playerSeat = 1;
+    state.activePlayer = 2;
+    state.activePlayerMetadata = {
+      id: "bot-balanced-v1",
+      displayName: "Balanced Bot",
+      playerType: "bot",
+      thinking: true,
+    };
+    api.getGame.mockResolvedValue(state);
+    const { wrapper } = await mountGame();
+    await flushPromises();
+
+    expect(wrapper.get(".turn-banner").text()).toBe(
+      "Balanced Bot is thinking…",
+    );
+    expect(wrapper.get(".move-hint").text()).toContain(
+      "submit its move automatically",
     );
   });
 

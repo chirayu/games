@@ -23,6 +23,12 @@ export interface GameState {
     playerTwo: number;
   };
   activePlayer: 1 | 2;
+  activePlayerMetadata: {
+    id: string;
+    displayName: string;
+    playerType: "human" | "bot";
+    thinking: boolean;
+  };
   playerSeat: 1 | 2;
   version: number;
   status: "active" | "completed";

@@ -375,8 +375,12 @@ func (handler *handler) writeAllocationError(response http.ResponseWriter, err e
 func (handler *handler) getGame(response http.ResponseWriter, request *http.Request) {
 	response.Header().Set("Cache-Control", "no-store")
 	gameID := request.PathValue("gameID")
-	token := handler.playerSessionToken(request)
-	view, err := handler.service.GetGame(request.Context(), gameID, token)
+	credential, _, valid := handler.gameCredential(request)
+	if !valid {
+		writeError(response, http.StatusUnauthorized, "unauthorized", "a valid player session is required")
+		return
+	}
+	view, err := handler.service.GetGameWithCredential(request.Context(), gameID, credential)
 	switch {
 	case errors.Is(err, app.ErrGameNotFound):
 		writeError(response, http.StatusNotFound, "game_not_found", "game was not found")
@@ -393,7 +397,12 @@ func (handler *handler) getGame(response http.ResponseWriter, request *http.Requ
 
 func (handler *handler) submitMove(response http.ResponseWriter, request *http.Request) {
 	response.Header().Set("Cache-Control", "no-store")
-	if !handler.validOrigin(request) {
+	credential, botPrincipal, valid := handler.gameCredential(request)
+	if !valid {
+		writeError(response, http.StatusUnauthorized, "unauthorized", "a valid player session is required")
+		return
+	}
+	if !botPrincipal && !handler.validOrigin(request) {
 		writeError(response, http.StatusForbidden, "invalid_origin", "request origin is not allowed")
 		return
 	}
@@ -412,8 +421,7 @@ func (handler *handler) submitMove(response http.ResponseWriter, request *http.R
 		return
 	}
 	gameID := request.PathValue("gameID")
-	token := handler.playerSessionToken(request)
-	view, err := handler.service.SubmitMove(request.Context(), gameID, token, input.TileIndexes, *input.ExpectedVersion)
+	view, err := handler.service.SubmitMoveWithCredential(request.Context(), gameID, credential, input.TileIndexes, *input.ExpectedVersion)
 	switch {
 	case errors.Is(err, app.ErrGameNotFound):
 		writeError(response, http.StatusNotFound, "game_not_found", "game was not found")
@@ -440,6 +448,18 @@ func (handler *handler) submitMove(response http.ResponseWriter, request *http.R
 	default:
 		writeJSON(response, http.StatusOK, map[string]any{"data": view})
 	}
+}
+
+func (handler *handler) gameCredential(request *http.Request) (app.GameCredential, bool, bool) {
+	authorization := strings.TrimSpace(request.Header.Get("Authorization"))
+	if authorization == "" {
+		return app.BrowserGameCredential(handler.playerSessionToken(request)), false, true
+	}
+	parts := strings.Fields(authorization)
+	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") || parts[1] == "" {
+		return app.GameCredential{}, false, false
+	}
+	return app.BotGameCredential(parts[1]), true, true
 }
 
 func (handler *handler) validOrigin(request *http.Request) bool {

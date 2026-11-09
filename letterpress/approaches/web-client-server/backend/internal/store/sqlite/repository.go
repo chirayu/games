@@ -133,6 +133,17 @@ type ManagedBot struct {
 	Profile BotProfile
 }
 
+// PendingBotTurn is a durable active assignment discovered by the bot control plane.
+type PendingBotTurn struct {
+	GameID               string
+	Version              int64
+	Seat                 int64
+	ConfigurationVersion int64
+	Style                string
+	EnglishKnowledge     string
+	SkillLevel           string
+}
+
 // PlayerSession is one independently revocable registered-player session.
 // TokenHash is the only credential persisted.
 type PlayerSession struct {
@@ -350,6 +361,35 @@ func (repository *Repository) AuthenticateBotRuntime(ctx context.Context, creden
 		return RegisteredPlayer{}, err
 	}
 	return RegisteredPlayer{ID: row.ID, DisplayName: row.DisplayName, NormalizedName: row.NormalizedName, PlayerType: row.PlayerType, CreatedAt: row.CreatedAt}, nil
+}
+
+// PutBotRuntimeCredential provisions or rotates a hash from trusted runtime configuration.
+func (repository *Repository) PutBotRuntimeCredential(ctx context.Context, playerID string, credentialHash [32]byte, createdAt time.Time) error {
+	if err := repository.queries.PutBotRuntimeCredential(ctx, generated.PutBotRuntimeCredentialParams{
+		TokenHash: credentialHash[:], PlayerID: playerID, CreatedAt: createdAt,
+	}); err != nil {
+		return fmt.Errorf("put bot runtime credential: %w", err)
+	}
+	return nil
+}
+
+// ListPendingBotTurns discovers durable turns without exposing game state or a mutation path.
+func (repository *Repository) ListPendingBotTurns(ctx context.Context, playerID string, limit int64) ([]PendingBotTurn, error) {
+	rows, err := repository.queries.ListPendingTurnsForBot(ctx, generated.ListPendingTurnsForBotParams{
+		PlayerID: playerID, ResultLimit: limit,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list pending bot turns: %w", err)
+	}
+	turns := make([]PendingBotTurn, len(rows))
+	for index, row := range rows {
+		turns[index] = PendingBotTurn{
+			GameID: row.GameID, Version: row.Version, Seat: row.Seat,
+			ConfigurationVersion: row.ConfigurationVersion, Style: row.Style,
+			EnglishKnowledge: row.EnglishKnowledgeLevel, SkillLevel: row.SkillLevel,
+		}
+	}
+	return turns, nil
 }
 
 // GetRegisteredPlayerBySessionHash authenticates one unexpired session.
@@ -791,6 +831,15 @@ func (repository *Repository) GetGameSeatByPlayer(ctx context.Context, gameID, p
 	})
 	if err != nil {
 		return GameSeat{}, fmt.Errorf("get game seat by player: %w", err)
+	}
+	return GameSeat{GameID: row.GameID, Seat: row.Seat, PlayerID: row.PlayerID, CreatedAt: row.CreatedAt}, nil
+}
+
+// GetGameSeatByNumber resolves current-player metadata for an authenticated view.
+func (repository *Repository) GetGameSeatByNumber(ctx context.Context, gameID string, seat int64) (GameSeat, error) {
+	row, err := repository.queries.GetGameSeatByNumber(ctx, generated.GetGameSeatByNumberParams{GameID: gameID, Seat: seat})
+	if err != nil {
+		return GameSeat{}, fmt.Errorf("get game seat by number: %w", err)
 	}
 	return GameSeat{GameID: row.GameID, Seat: row.Seat, PlayerID: row.PlayerID, CreatedAt: row.CreatedAt}, nil
 }

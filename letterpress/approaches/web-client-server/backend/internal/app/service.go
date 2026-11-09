@@ -37,6 +37,7 @@ type Store interface {
 	Health(context.Context) error
 	CreateRegisteredPlayerSession(context.Context, sqlite.RegisteredPlayer, sqlite.PlayerSession) (sqlite.RegisteredPlayer, bool, error)
 	GetRegisteredPlayerBySessionHash(context.Context, [32]byte, time.Time) (sqlite.RegisteredPlayer, error)
+	AuthenticateBotRuntime(context.Context, [32]byte) (sqlite.RegisteredPlayer, error)
 	GetRegisteredPlayerByID(context.Context, string) (sqlite.RegisteredPlayer, error)
 	DeletePlayerSession(context.Context, [32]byte) error
 	CreateGameAllocation(context.Context, sqlite.GameAllocation) (sqlite.GameAllocation, bool, error)
@@ -52,6 +53,7 @@ type Store interface {
 	GetGame(context.Context, string) (sqlite.Game, error)
 	ListMoves(context.Context, string) ([]sqlite.Move, error)
 	GetGameSeatByPlayer(context.Context, string, string) (sqlite.GameSeat, error)
+	GetGameSeatByNumber(context.Context, string, int64) (sqlite.GameSeat, error)
 	ListActiveGamesForPlayer(context.Context, string, time.Time, string, int) ([]sqlite.ActiveGameSummary, error)
 	SearchRegisteredPlayers(context.Context, string, string, string, string, int) ([]sqlite.RegisteredPlayer, error)
 	TransactMove(context.Context, string, string, int64, sqlite.MoveOperation) error
@@ -59,18 +61,39 @@ type Store interface {
 
 // GameView is the authenticated, derived state returned to a player.
 type GameView struct {
-	ID           string      `json:"id"`
-	Width        int         `json:"width"`
-	Height       int         `json:"height"`
-	Tiles        []GameTile  `json:"tiles"`
-	Scores       Scores      `json:"scores"`
-	ActivePlayer int64       `json:"activePlayer"`
-	PlayerSeat   int64       `json:"playerSeat"`
-	Version      int64       `json:"version"`
-	Status       string      `json:"status"`
-	Moves        []MoveView  `json:"moves"`
-	Result       *GameResult `json:"result,omitempty"`
+	ID                   string               `json:"id"`
+	Width                int                  `json:"width"`
+	Height               int                  `json:"height"`
+	Tiles                []GameTile           `json:"tiles"`
+	Scores               Scores               `json:"scores"`
+	ActivePlayer         int64                `json:"activePlayer"`
+	ActivePlayerMetadata ActivePlayerMetadata `json:"activePlayerMetadata"`
+	PlayerSeat           int64                `json:"playerSeat"`
+	Version              int64                `json:"version"`
+	Status               string               `json:"status"`
+	Moves                []MoveView           `json:"moves"`
+	Result               *GameResult          `json:"result,omitempty"`
 }
+
+// ActivePlayerMetadata lets every client represent a normal bot-thinking turn.
+type ActivePlayerMetadata struct {
+	ID          string `json:"id"`
+	DisplayName string `json:"displayName"`
+	PlayerType  string `json:"playerType"`
+	Thinking    bool   `json:"thinking"`
+}
+
+// GameCredential distinguishes public browser sessions from managed bot runtime credentials.
+type GameCredential struct {
+	browserToken string
+	botToken     string
+}
+
+// BrowserGameCredential authenticates the existing session-cookie principal.
+func BrowserGameCredential(token string) GameCredential { return GameCredential{browserToken: token} }
+
+// BotGameCredential authenticates a managed bot bearer principal.
+func BotGameCredential(token string) GameCredential { return GameCredential{botToken: token} }
 
 // MoveView is an accepted move in turn order. The server derives every word.
 type MoveView struct {
@@ -188,14 +211,16 @@ func (service *Service) CreateGame(ctx context.Context, playerOneID, playerTwoID
 
 // GetGame returns the current authoritative state for an authenticated player.
 func (service *Service) GetGame(ctx context.Context, gameID, token string) (GameView, error) {
-	player, err := service.CurrentPlayer(ctx, token)
-	if errors.Is(err, ErrInvalidPlayerSession) {
-		return GameView{}, ErrUnauthorized
-	}
+	return service.GetGameWithCredential(ctx, gameID, BrowserGameCredential(token))
+}
+
+// GetGameWithCredential serves both human and bot principals through one game contract.
+func (service *Service) GetGameWithCredential(ctx context.Context, gameID string, credential GameCredential) (GameView, error) {
+	playerID, err := service.authenticateGamePrincipal(ctx, credential)
 	if err != nil {
 		return GameView{}, err
 	}
-	seat, err := service.store.GetGameSeatByPlayer(ctx, gameID, player.ID)
+	seat, err := service.store.GetGameSeatByPlayer(ctx, gameID, playerID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return GameView{}, ErrUnauthorized
 	}
@@ -208,6 +233,14 @@ func (service *Service) GetGame(ctx context.Context, gameID, token string) (Game
 	}
 	if err != nil {
 		return GameView{}, fmt.Errorf("get game: %w", err)
+	}
+	activeSeat, err := service.store.GetGameSeatByNumber(ctx, gameID, stored.CurrentPlayer)
+	if err != nil {
+		return GameView{}, fmt.Errorf("get active game seat: %w", err)
+	}
+	activeIdentity, err := service.store.GetRegisteredPlayerByID(ctx, activeSeat.PlayerID)
+	if err != nil {
+		return GameView{}, fmt.Errorf("get active player identity: %w", err)
 	}
 
 	if len(stored.BoardLetters) != game.DefaultWidth*game.DefaultHeight || len(stored.TileOwners) != len(stored.BoardLetters) {
@@ -256,7 +289,12 @@ func (service *Service) GetGame(ctx context.Context, gameID, token string) (Game
 	view := GameView{
 		ID: gameID, Width: game.DefaultWidth, Height: game.DefaultHeight, Tiles: tiles,
 		Scores:       Scores{PlayerOne: analysis.PlayerOneScore, PlayerTwo: analysis.PlayerTwoScore},
-		ActivePlayer: stored.CurrentPlayer, PlayerSeat: seat.Seat, Version: stored.Version, Status: stored.Status,
+		ActivePlayer: stored.CurrentPlayer,
+		ActivePlayerMetadata: ActivePlayerMetadata{
+			ID: activeIdentity.ID, DisplayName: activeIdentity.DisplayName, PlayerType: activeIdentity.PlayerType,
+			Thinking: activeIdentity.PlayerType == "bot" && stored.Status == string(game.StatusActive),
+		},
+		PlayerSeat: seat.Seat, Version: stored.Version, Status: stored.Status,
 		Moves: moveViews,
 	}
 	if outcome, ok := restored.Outcome(); ok {
@@ -275,14 +313,22 @@ func (service *Service) SubmitMove(
 	tileIndexes []int,
 	expectedVersion int64,
 ) (GameView, error) {
-	player, err := service.CurrentPlayer(ctx, token)
-	if errors.Is(err, ErrInvalidPlayerSession) {
-		return GameView{}, ErrUnauthorized
-	}
+	return service.SubmitMoveWithCredential(ctx, gameID, BrowserGameCredential(token), tileIndexes, expectedVersion)
+}
+
+// SubmitMoveWithCredential sends human and bot moves through the same authoritative transaction.
+func (service *Service) SubmitMoveWithCredential(
+	ctx context.Context,
+	gameID string,
+	credential GameCredential,
+	tileIndexes []int,
+	expectedVersion int64,
+) (GameView, error) {
+	playerID, err := service.authenticateGamePrincipal(ctx, credential)
 	if err != nil {
 		return GameView{}, err
 	}
-	err = service.store.TransactMove(ctx, gameID, player.ID, expectedVersion, func(
+	err = service.store.TransactMove(ctx, gameID, playerID, expectedVersion, func(
 		stored sqlite.Game,
 		seat sqlite.GameSeat,
 		storedMoves []sqlite.Move,
@@ -334,7 +380,32 @@ func (service *Service) SubmitMove(
 	case err != nil:
 		return GameView{}, err
 	}
-	return service.GetGame(ctx, gameID, token)
+	return service.GetGameWithCredential(ctx, gameID, credential)
+}
+
+func (service *Service) authenticateGamePrincipal(ctx context.Context, credential GameCredential) (string, error) {
+	if credential.botToken != "" && credential.browserToken == "" {
+		hash, ok := credentialHash(credential.botToken)
+		if !ok {
+			return "", ErrUnauthorized
+		}
+		player, err := service.store.AuthenticateBotRuntime(ctx, hash)
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", ErrUnauthorized
+		}
+		if err != nil {
+			return "", fmt.Errorf("authenticate bot runtime: %w", err)
+		}
+		return player.ID, nil
+	}
+	if credential.browserToken != "" && credential.botToken == "" {
+		player, err := service.CurrentPlayer(ctx, credential.browserToken)
+		if errors.Is(err, ErrInvalidPlayerSession) {
+			return "", ErrUnauthorized
+		}
+		return player.ID, err
+	}
+	return "", ErrUnauthorized
 }
 
 func restoreMoves(storedMoves []sqlite.Move) ([]game.Move, []MoveView, error) {

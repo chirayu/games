@@ -1,9 +1,9 @@
 # Production deployment
 
-Letterpress ships as one Go HTTP service that serves the compiled Vue app and
-the `/api/v1` API from the same origin. The supported deployment artifact is a
-provider-neutral OCI image with one persistent SQLite directory. This guide
-does not provision a hosting provider.
+Letterpress ships one OCI image containing the Go HTTP service, compiled Vue
+app, and optional managed-bot worker. The supported deployment uses one HTTP
+service replica, one bot worker replica, and one persistent SQLite directory.
+This guide does not provision a hosting provider.
 
 ## Runtime contract
 
@@ -24,6 +24,14 @@ builds place the same notice under `build/licenses/`.
 | `LETTERPRESS_STATIC_DIR` | `/app/frontend` | Compiled Vue assets |
 | `LETTERPRESS_INSECURE_COOKIES` | `false` | Local HTTP override; never enable in production |
 | `LETTERPRESS_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, or `error` JSON logs |
+
+The bot worker uses these additional values:
+
+| Environment variable | Default | Purpose |
+| --- | --- | --- |
+| `LETTERPRESS_BOT_TOKEN` | none | Required base64url-encoded 32-byte runtime secret; never store it in source control |
+| `LETTERPRESS_BOT_API_BASE_URL` | `http://127.0.0.1:8080` | Internal URL of the HTTP service |
+| `LETTERPRESS_BOT_PLAYER_ID` | `bot-balanced-v1` | Managed bot identity to operate |
 
 Set `LETTERPRESS_PUBLIC_BASE_URL` to the externally visible HTTPS origin. The
 service rejects an HTTP public URL while secure cookies are enabled. Player
@@ -62,6 +70,9 @@ LETTERPRESS_STATIC_DIR="$PWD/build/frontend" \
 ./build/letterpress
 ```
 
+The same build contains `build/letterpress-bot` for the separately configured
+worker process.
+
 ## Run the container
 
 Create a durable volume and start one service:
@@ -74,6 +85,23 @@ docker run --name letterpress --restart unless-stopped \
   -e LETTERPRESS_PUBLIC_BASE_URL=https://play.example.com \
   letterpress:local
 ```
+
+Run the bot worker from the same image and volume after the HTTP service is
+ready. Supply its secret through the platform's secret manager; the worker
+stores only its SHA-256 hash and uses the raw value only for bearer requests:
+
+```sh
+docker run --name letterpress-bot --restart unless-stopped \
+  -v letterpress-data:/data \
+  -e LETTERPRESS_BOT_TOKEN="$LETTERPRESS_BOT_TOKEN" \
+  -e LETTERPRESS_BOT_API_BASE_URL=http://letterpress:8080 \
+  --entrypoint /app/letterpress-bot \
+  letterpress:local
+```
+
+Place both containers on the same private network so the `letterpress` hostname
+resolves. Keep exactly one bot worker replica for routine operation; correctness
+still relies on expected-version conflicts if workers overlap during a restart.
 
 On startup the service opens SQLite, enables foreign keys and WAL mode, and
 applies embedded Goose migrations before reporting ready. A restart with the

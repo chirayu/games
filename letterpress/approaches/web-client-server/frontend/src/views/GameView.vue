@@ -40,13 +40,21 @@ const turnMessage = computed(() => {
   if (!game.value) return "";
   if (game.value.status === "completed") return "Game complete";
   if (game.value.activePlayer === game.value.playerSeat) return "Your turn";
+  if (
+    game.value.activePlayerMetadata.playerType === "bot" &&
+    game.value.activePlayerMetadata.thinking
+  )
+    return `${game.value.activePlayerMetadata.displayName} is thinking…`;
   return `Player ${game.value.activePlayer}’s turn`;
 });
 
 const playHint = computed(() =>
   game.value?.status === "completed"
     ? "This game is complete."
-    : "Wait for the other player’s move.",
+    : game.value?.activePlayerMetadata.playerType === "bot" &&
+        game.value.activePlayerMetadata.thinking
+      ? "The bot will submit its move automatically."
+      : "Wait for the other player’s move.",
 );
 
 const resultHeading = computed(() => {

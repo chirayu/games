@@ -108,7 +108,7 @@ enabled flag. `bot-balanced-v1` is the baseline managed identity with a
 profile versions are repository-level trusted administration operations with no
 public HTTP route.
 
-The future bot runtime authenticates with a high-entropy credential supplied by
+The bot runtime authenticates with a high-entropy credential supplied by
 trusted configuration. Only its SHA-256 hash is stored in
 `bot_runtime_credentials`; raw credentials are never database fields, API
 responses, or logs. This credential namespace is separate from public browser
@@ -136,6 +136,14 @@ without a valid session see name entry; authenticated players go directly to
 the lobby. The lobby header always identifies the current player and provides
 logout. Network, validation, and expired-session states remain recoverable, and
 the UI explicitly warns that knowing a name is sufficient to use that identity.
+
+Managed bot credentials are accepted as bearer credentials only on the same
+authenticated game read and move routes used by browser sessions. Bearer bot
+requests do not require a browser `Origin`; browser mutations retain same-origin
+enforcement. Both principal types pass through the same membership checks,
+versioned move transaction, domain validation, and response contract. Game
+views include safe current-player metadata, allowing the UI to render a bot's
+active turn as “thinking” while continuing normal visibility polling.
 
 ## Registered game membership
 
@@ -269,6 +277,26 @@ include the final scores and either a winning seat or a tie. The final move,
 completed status, ownership, version increment, and history row are committed
 in the same immediate SQLite transaction; later moves are rejected.
 
+## Bot runtime
+
+The bot worker is a separate durable control-plane process. It discovers only
+active games where its managed identity occupies the current seat, using the
+ordinary game row and snapshotted seat profile as the assignment feed. It then
+authenticates as that bot, fetches the game through `GET /api/v1/games/{id}`,
+calculates outside any write transaction, and submits ordered indexes and the
+observed version through `POST /api/v1/games/{id}/moves`. There is no bot-only
+state response or mutation endpoint.
+
+Discovery is replayable, so restart recovery requires no volatile job state.
+Concurrent workers may calculate the same turn, but the existing immediate
+transaction and expected version allow only one accepted move; the loser
+refetches and stops when the turn has advanced. Version conflicts trigger a
+fresh read and policy calculation. Network, rate-limit, and server failures use
+three bounded attempts with 100/200 ms backoff. Failures are structured and
+omit the runtime credential, authorization header, board, word, and selected
+tiles. A failed bot calculation or submission cannot roll back the preceding
+human transaction.
+
 ## Client recovery
 
 The client treats server state as authoritative. It refreshes on initial load,
@@ -282,15 +310,17 @@ sessions last 180 days and authorize every game in which the player has a seat.
 
 ## Production shape
 
-The production artifact is a provider-neutral OCI container running one Go
-service with compiled Vue assets and a mounted persistent directory for SQLite.
+The production artifact is a provider-neutral OCI container containing the Go
+HTTP service, bot worker, compiled Vue assets, and a mounted persistent
+directory for SQLite. The HTTP service and optional bot worker run as separate
+processes from the same image and share that durable database.
 The Go router serves the SPA and `/api/v1` from one origin. Environment values
 configure the listener, canonical public URL, database, static assets, cookie
 security, and JSON log level. The process handles `SIGTERM` with a bounded
 graceful shutdown; `/healthz` reports liveness and `/readyz` checks SQLite.
 
-The container runs one non-root application process and expects one writable
-`/data` volume. Startup applies embedded migrations before listening. Request
+Each container runs one non-root process and expects the same writable `/data`
+volume. HTTP startup applies embedded migrations before listening. Request
 logs include method, path, status, response bytes, and duration but omit query
 strings, headers, cookies, and bodies so player session credentials are not exposed.
 The deployment runbook defines backup, restore, migration, and rollback

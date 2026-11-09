@@ -53,6 +53,7 @@ allocation REST API and new player-facing UI are tracked separately.
 
 ```text
 backend/
+  cmd/bot-runtime/
   cmd/server/
   internal/app/
   internal/game/
@@ -88,6 +89,19 @@ The service listens on `http://localhost:8080` by default. Confirm it is ready:
 ```sh
 curl http://localhost:8080/healthz
 ```
+
+To run managed bot turns locally, generate a 32-byte base64url secret once and
+start the durable worker against the same SQLite file in another terminal:
+
+```sh
+export LETTERPRESS_BOT_TOKEN="$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=')"
+cd approaches/web-client-server/backend
+go run ./cmd/bot-runtime -api-base-url http://localhost:8080
+```
+
+The worker provisions only the secret's SHA-256 hash for the configured managed
+bot, discovers pending turns from durable assignments, and reads/submits moves
+through the shared REST game endpoints. Reuse the same secret after restart.
 
 Start the frontend in another terminal:
 
@@ -160,7 +174,9 @@ pending allocation state after reload. It contains no share-link or invitation
 compatibility path.
 Managed bots now have stable registered-player identities, immutable versioned
 profiles, hash-only runtime credentials, and historical profile snapshots on
-ordinary game seats. Move generation and bot allocation remain later tickets.
+ordinary game seats. Legal move search, the versioned balanced policy, and a
+restart-safe REST bot worker are in place. Explicit bot allocation remains the
+next ticket.
 
 ## Documentation
 

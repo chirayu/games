@@ -90,6 +90,29 @@ func (q *Queries) GetGameSeatBotProfile(ctx context.Context, arg GetGameSeatBotP
 	return i, err
 }
 
+const getGameSeatByNumber = `-- name: GetGameSeatByNumber :one
+SELECT game_id, seat, player_id, created_at
+FROM game_seats
+WHERE game_id = ? AND seat = ?
+`
+
+type GetGameSeatByNumberParams struct {
+	GameID string `json:"game_id"`
+	Seat   int64  `json:"seat"`
+}
+
+func (q *Queries) GetGameSeatByNumber(ctx context.Context, arg GetGameSeatByNumberParams) (GameSeat, error) {
+	row := q.db.QueryRowContext(ctx, getGameSeatByNumber, arg.GameID, arg.Seat)
+	var i GameSeat
+	err := row.Scan(
+		&i.GameID,
+		&i.Seat,
+		&i.PlayerID,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const getGameSeatByPlayer = `-- name: GetGameSeatByPlayer :one
 SELECT game_id, seat, player_id, created_at
 FROM game_seats

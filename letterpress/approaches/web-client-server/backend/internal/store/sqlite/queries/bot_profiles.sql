@@ -43,3 +43,25 @@ SELECT p.id, p.display_name, p.normalized_name, p.player_type, p.created_at
 FROM bot_runtime_credentials AS c
 JOIN registered_players AS p ON p.id = c.player_id
 WHERE c.token_hash = ? AND p.player_type = 'bot';
+
+-- name: PutBotRuntimeCredential :exec
+INSERT INTO bot_runtime_credentials (token_hash, player_id, created_at)
+VALUES (?, ?, ?)
+ON CONFLICT(player_id) DO UPDATE SET
+    token_hash = excluded.token_hash,
+    created_at = excluded.created_at;
+
+-- name: ListPendingTurnsForBot :many
+SELECT g.id AS game_id, g.version, own.seat,
+       profile.configuration_version, profile.style,
+       profile.english_knowledge_level, profile.skill_level
+FROM games AS g
+JOIN game_seats AS own
+    ON own.game_id = g.id AND own.seat = g.current_player
+JOIN game_seat_bot_profiles AS profile
+    ON profile.game_id = own.game_id
+   AND profile.seat = own.seat
+   AND profile.player_id = own.player_id
+WHERE g.status = 'active' AND own.player_id = sqlc.arg(player_id)
+ORDER BY g.updated_at, g.id
+LIMIT sqlc.arg(result_limit);

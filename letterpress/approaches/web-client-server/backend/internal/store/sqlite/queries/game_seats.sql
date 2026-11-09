@@ -25,6 +25,11 @@ SELECT game_id, seat, player_id, created_at
 FROM game_seats
 WHERE game_id = ? AND player_id = ?;
 
+-- name: GetGameSeatByNumber :one
+SELECT game_id, seat, player_id, created_at
+FROM game_seats
+WHERE game_id = ? AND seat = ?;
+
 -- name: ListActiveGamesForPlayer :many
 SELECT
     g.id,

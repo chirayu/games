@@ -11,7 +11,8 @@ WORKDIR /src/backend
 COPY backend/go.mod backend/go.sum ./
 RUN go mod download
 COPY backend/ ./
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/letterpress ./cmd/server
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/letterpress ./cmd/server \
+    && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/letterpress-bot ./cmd/bot-runtime
 
 FROM alpine:3.22
 RUN apk add --no-cache ca-certificates tzdata \
@@ -20,6 +21,7 @@ RUN apk add --no-cache ca-certificates tzdata \
     && mkdir -p /data /app/frontend /app/licenses \
     && chown -R letterpress:letterpress /data /app
 COPY --from=backend /out/letterpress /app/letterpress
+COPY --from=backend /out/letterpress-bot /app/letterpress-bot
 COPY --from=frontend /src/frontend/dist/ /app/frontend/
 COPY --from=backend /src/backend/internal/game/dictionary/LICENSE-ESDB.txt /app/licenses/ESDB.txt
 ENV LETTERPRESS_ADDR=:8080 \

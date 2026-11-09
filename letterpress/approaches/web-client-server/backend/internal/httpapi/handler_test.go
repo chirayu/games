@@ -3,6 +3,8 @@ package httpapi
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -193,6 +195,68 @@ func TestGetGameReturnsSharedBoardWithPlayerPerspective(t *testing.T) {
 	if !playerOne.Tiles[0].Protected || !playerOne.Tiles[24].Protected || playerOne.Tiles[1].Protected {
 		t.Fatalf("derived protection is incorrect: tiles 0=%t, 24=%t, 1=%t", playerOne.Tiles[0].Protected, playerOne.Tiles[24].Protected, playerOne.Tiles[1].Protected)
 	}
+}
+
+func TestHumanAndBotPrincipalsUseTheSameGameHTTPContract(t *testing.T) {
+	handler, repository, now := newIntegrationHandler(t, false)
+	humanResponse, human := enterPlayer(t, handler, "Contract Human")
+	humanCookies := humanResponse.Result().Cookies()
+	if len(humanCookies) != 1 {
+		t.Fatalf("human cookies = %d, want 1", len(humanCookies))
+	}
+	bot, err := repository.GetLatestEnabledBotProfile(context.Background(), "bot-balanced-v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawToken := bytes.Repeat([]byte{7}, 32)
+	token := base64.RawURLEncoding.EncodeToString(rawToken)
+	if err := repository.PutBotRuntimeCredential(context.Background(), bot.Player.ID, sha256.Sum256(rawToken), now); err != nil {
+		t.Fatal(err)
+	}
+	gameID := "human-bot-contract"
+	if err := repository.CreateGame(context.Background(), sqlite.Game{
+		ID: gameID, BoardLetters: []byte("ABCDEFGHIJKLMNOPQRSTUVWXY"), TileOwners: make([]byte, 25),
+		CurrentPlayer: 1, Status: "active", CreatedAt: now, UpdatedAt: now,
+	}, [2]sqlite.GameSeat{
+		{GameID: gameID, Seat: 1, PlayerID: human.ID, CreatedAt: now},
+		{GameID: gameID, Seat: 2, PlayerID: bot.Player.ID, CreatedAt: now, BotProfile: &sqlite.BotProfileSnapshot{
+			ConfigurationVersion: bot.Profile.ConfigurationVersion, Style: bot.Profile.Style,
+			EnglishKnowledgeLevel: bot.Profile.EnglishKnowledgeLevel, SkillLevel: bot.Profile.SkillLevel,
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	humanView := loadGame(t, handler, gameID, humanCookies[0])
+	if humanView.PlayerSeat != 1 || humanView.ActivePlayerMetadata.PlayerType != "human" || humanView.ActivePlayerMetadata.Thinking {
+		t.Fatalf("human view metadata = %#v", humanView.ActivePlayerMetadata)
+	}
+	decodeGameView(t, submitMove(t, handler, gameID, humanCookies[0], []int{0}, 0), http.StatusOK)
+
+	botGet := httptest.NewRequest(http.MethodGet, testOrigin+"/api/v1/games/"+gameID, nil)
+	botGet.Header.Set("Authorization", "Bearer "+token)
+	botGetResponse := httptest.NewRecorder()
+	handler.ServeHTTP(botGetResponse, botGet)
+	botView := decodeGameView(t, botGetResponse, http.StatusOK)
+	if botView.PlayerSeat != 2 || botView.ActivePlayerMetadata.ID != bot.Player.ID || !botView.ActivePlayerMetadata.Thinking {
+		t.Fatalf("bot view metadata = %#v, seat %d", botView.ActivePlayerMetadata, botView.PlayerSeat)
+	}
+	body := bytes.NewBufferString(`{"tileIndexes":[1],"expectedVersion":1}`)
+	botPost := httptest.NewRequest(http.MethodPost, testOrigin+"/api/v1/games/"+gameID+"/moves", body)
+	botPost.Header.Set("Authorization", "Bearer "+token)
+	botPost.Header.Set("Content-Type", "application/json")
+	botPostResponse := httptest.NewRecorder()
+	handler.ServeHTTP(botPostResponse, botPost)
+	botMove := decodeGameView(t, botPostResponse, http.StatusOK)
+	if botMove.Version != 2 || botMove.ActivePlayer != 1 || len(botMove.Moves) != 2 {
+		t.Fatalf("bot move view = version %d active %d moves %d", botMove.Version, botMove.ActivePlayer, len(botMove.Moves))
+	}
+
+	unauthorized := httptest.NewRequest(http.MethodGet, testOrigin+"/api/v1/games/"+gameID, nil)
+	unauthorized.Header.Set("Authorization", "Bearer invalid")
+	unauthorizedResponse := httptest.NewRecorder()
+	handler.ServeHTTP(unauthorizedResponse, unauthorized)
+	assertAPIError(t, unauthorizedResponse, http.StatusUnauthorized, "unauthorized")
 }
 
 func TestGetGameReportsUnauthorizedAndMissingStates(t *testing.T) {

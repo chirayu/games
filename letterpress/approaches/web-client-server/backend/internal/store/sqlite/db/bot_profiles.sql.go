@@ -218,3 +218,84 @@ func (q *Queries) ListLatestEnabledBotProfiles(ctx context.Context) ([]ListLates
 	}
 	return items, nil
 }
+
+const listPendingTurnsForBot = `-- name: ListPendingTurnsForBot :many
+SELECT g.id AS game_id, g.version, own.seat,
+       profile.configuration_version, profile.style,
+       profile.english_knowledge_level, profile.skill_level
+FROM games AS g
+JOIN game_seats AS own
+    ON own.game_id = g.id AND own.seat = g.current_player
+JOIN game_seat_bot_profiles AS profile
+    ON profile.game_id = own.game_id
+   AND profile.seat = own.seat
+   AND profile.player_id = own.player_id
+WHERE g.status = 'active' AND own.player_id = ?1
+ORDER BY g.updated_at, g.id
+LIMIT ?2
+`
+
+type ListPendingTurnsForBotParams struct {
+	PlayerID    string `json:"player_id"`
+	ResultLimit int64  `json:"result_limit"`
+}
+
+type ListPendingTurnsForBotRow struct {
+	GameID                string `json:"game_id"`
+	Version               int64  `json:"version"`
+	Seat                  int64  `json:"seat"`
+	ConfigurationVersion  int64  `json:"configuration_version"`
+	Style                 string `json:"style"`
+	EnglishKnowledgeLevel string `json:"english_knowledge_level"`
+	SkillLevel            string `json:"skill_level"`
+}
+
+func (q *Queries) ListPendingTurnsForBot(ctx context.Context, arg ListPendingTurnsForBotParams) ([]ListPendingTurnsForBotRow, error) {
+	rows, err := q.db.QueryContext(ctx, listPendingTurnsForBot, arg.PlayerID, arg.ResultLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListPendingTurnsForBotRow{}
+	for rows.Next() {
+		var i ListPendingTurnsForBotRow
+		if err := rows.Scan(
+			&i.GameID,
+			&i.Version,
+			&i.Seat,
+			&i.ConfigurationVersion,
+			&i.Style,
+			&i.EnglishKnowledgeLevel,
+			&i.SkillLevel,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const putBotRuntimeCredential = `-- name: PutBotRuntimeCredential :exec
+INSERT INTO bot_runtime_credentials (token_hash, player_id, created_at)
+VALUES (?, ?, ?)
+ON CONFLICT(player_id) DO UPDATE SET
+    token_hash = excluded.token_hash,
+    created_at = excluded.created_at
+`
+
+type PutBotRuntimeCredentialParams struct {
+	TokenHash []byte    `json:"token_hash"`
+	PlayerID  string    `json:"player_id"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+func (q *Queries) PutBotRuntimeCredential(ctx context.Context, arg PutBotRuntimeCredentialParams) error {
+	_, err := q.db.ExecContext(ctx, putBotRuntimeCredential, arg.TokenHash, arg.PlayerID, arg.CreatedAt)
+	return err
+}
